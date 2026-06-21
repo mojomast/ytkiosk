@@ -1243,10 +1243,16 @@ class SimpleVideoPlayer:
         for w in self.kw_scrollable.winfo_children():
             w.destroy()
 
-        for col in range(8):
-            self.kw_scrollable.grid_columnconfigure(col, weight=1, uniform="kw")
-
         max_rows = 6
+        total_items = len(self.keywords) + 1 + (1 if self.allow_keyword_changes else 0)
+        column_count = max(1, (total_items + max_rows - 1) // max_rows)
+        for col in range(12):
+            self.kw_scrollable.grid_columnconfigure(col, weight=0, minsize=0, uniform="")
+        for col in range(column_count):
+            self.kw_scrollable.grid_columnconfigure(
+                col, weight=1, minsize=360, uniform="kw"
+            )
+
         item_index = 0
 
         fav_row = tk.Frame(self.kw_scrollable, bg="#1a1a1a")
