@@ -73,6 +73,7 @@ include = [
   "HANDOFF.md",
   "LICENSE*",
   "THIRD_PARTY_LICENSES.md",
+  "install.sh",
   "pyproject.toml",
   "yt-player.desktop",
   "simple-video-player.py",

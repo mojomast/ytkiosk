@@ -92,6 +92,16 @@ sudo install -m 755 "$HOME/.deno/bin/deno" /usr/local/bin/deno
 
 ## Installation
 
+One-line install for Debian, Ubuntu, and Linux Mint:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mojomast/ytkiosk/main/install.sh | bash
+```
+
+The installer adds system dependencies (`mpv`, `python3-tk`, X11 helpers), installs the official `yt-dlp` binary for the current legacy subprocess path, installs Deno if missing, installs `uv` if missing, installs YTKiosk from GitHub, and runs `ytkiosk-doctor`.
+
+Manual install:
+
 ```bash
 # System dependencies
 sudo apt install python3 python3-tk mpv
