@@ -253,6 +253,38 @@ def test_captive_portal_accept_button_detection():
          f"fields={parser.fields}")
 
 
+def test_captive_portal_form_selection():
+    mod = _import_module()
+    parser = mod.PortalFormParser()
+    parser.feed(
+        '<form method="post" action="/newsletter">'
+        '<input name="email" value="">'
+        '<button type="submit">Submit</button>'
+        '</form>'
+        '<form method="post" action="/accept">'
+        '<input type="hidden" name="token" value="abc">'
+        '<button type="submit" name="choice" value="1">Accepter</button>'
+        '</form>'
+    )
+    form = mod._select_portal_form(parser)
+    test("Captive portal parser selects accept form",
+         form is not None and form.get("action") == "/accept",
+         f"form={form}")
+    submit = form.get("accept_submit") if form else None
+    test("Captive portal parser keeps clicked button value",
+         submit is not None and submit.get("name") == "choice" and submit.get("value") == "1",
+         f"submit={submit}")
+
+
+def test_captive_portal_submit_url_uses_final_url():
+    mod = _import_module()
+    final_url = "http://portal.local/login"
+    test("Empty portal form action submits to final URL",
+         mod._portal_submit_url(final_url, "") == final_url)
+    test("Relative portal form action resolves from final URL",
+         mod._portal_submit_url(final_url, "/accept") == "http://portal.local/accept")
+
+
 def test_search_constants():
     mod = _import_module()
     test("SEARCH_COUNT >= 20", mod.SEARCH_COUNT >= 20,
@@ -394,6 +426,8 @@ if __name__ == "__main__":
     test_mpv_remote_playlist_methods()
     test_audio_backend_detection()
     test_captive_portal_accept_button_detection()
+    test_captive_portal_form_selection()
+    test_captive_portal_submit_url_uses_final_url()
 
     print("\n--- Configuration ---")
     test_search_constants()

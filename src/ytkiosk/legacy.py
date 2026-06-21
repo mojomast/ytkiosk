@@ -427,6 +427,27 @@ ACCEPT_WORDS = (
     "valider",
 )
 
+BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "fr,en;q=0.8",
+    "Accept-Encoding": "identity",
+    "Connection": "close",
+}
+
+SENSITIVE_FIELD_WORDS = (
+    "password",
+    "passwd",
+    "email",
+    "room",
+    "voucher",
+    "phone",
+    "sms",
+    "card",
+    "payment",
+    "code",
+)
+
 EXPECTED = {
     "http://connectivitycheck.gstatic.com/generate_204": (204, None),
     "http://captive.apple.com/hotspot-detect.html": (200, "Success"),
@@ -506,8 +527,9 @@ class PortalFormParser(html.parser.HTMLParser):
         self.form_action = None
         self.form_method = "get"
         self.fields = []
+        self.forms = []
         self._in_form = False
-        self._current = {}
+        self._current_form = None
         self._current_button = None
         self.has_accept_submit = False
 
@@ -517,6 +539,17 @@ class PortalFormParser(html.parser.HTMLParser):
             self._in_form = True
             self.form_action = d.get("action")
             self.form_method = d.get("method", "get").lower()
+            self._current_form = {
+                "action": self.form_action,
+                "method": self.form_method,
+                "fields": [],
+                "accept_submit": None,
+                "has_accept": False,
+                "enctype": d.get("enctype", "application/x-www-form-urlencoded").lower(),
+            }
+            self.forms.append(self._current_form)
+        if not self._in_form or self._current_form is None or "disabled" in d:
+            return
         if self._in_form and tag == "input":
             ftype = d.get("type", "").lower()
             field = {
@@ -528,8 +561,11 @@ class PortalFormParser(html.parser.HTMLParser):
                 label = f"{field['name']} {field['value']}".lower()
                 if _has_accept_word(label):
                     self.has_accept_submit = True
+                    self._current_form["has_accept"] = True
+                    self._current_form["accept_submit"] = field
             if field.get("name"):
                 self.fields.append(field)
+                self._current_form["fields"].append(field)
         if self._in_form and tag == "button" and d.get("type", "submit") == "submit":
             field = {
                 "name": d.get("name", ""),
@@ -537,22 +573,71 @@ class PortalFormParser(html.parser.HTMLParser):
                 "type": "submit",
             }
             self._current_button = field
+            self._current_button["form"] = self._current_form
             if field.get("name"):
                 self.fields.append(field)
+                self._current_form["fields"].append(field)
 
     def handle_data(self, data):
         if self._in_form and self._current_button is not None:
             text = data.strip()
             if text and _has_accept_word(text):
                 self.has_accept_submit = True
+                form = self._current_button.get("form")
+                if form is not None:
+                    form["has_accept"] = True
+                    form["accept_submit"] = self._current_button
                 if not self._current_button.get("value"):
                     self._current_button["value"] = text
 
     def handle_endtag(self, tag):
         if tag == "form":
             self._in_form = False
+            self._current_form = None
         if tag == "button":
             self._current_button = None
+
+
+def _portal_form_score(form):
+    if not form.get("has_accept"):
+        return -1
+    if form.get("enctype") not in ("", "application/x-www-form-urlencoded"):
+        return -1
+    score = 10
+    for field in form.get("fields", []):
+        text = f"{field.get('name', '')} {field.get('type', '')}".lower()
+        if any(word in text for word in SENSITIVE_FIELD_WORDS):
+            return -1
+        if field.get("type") == "hidden":
+            score += 1
+    return score
+
+
+def _select_portal_form(parser):
+    candidates = [form for form in parser.forms if _portal_form_score(form) >= 0]
+    if candidates:
+        return max(candidates, key=_portal_form_score)
+    if parser.has_accept_submit:
+        return {
+            "action": parser.form_action,
+            "method": parser.form_method,
+            "fields": parser.fields,
+            "accept_submit": None,
+            "has_accept": True,
+            "enctype": "application/x-www-form-urlencoded",
+        }
+    return None
+
+
+def _origin_for(url):
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _portal_submit_url(final_url, action=None, base_url=None):
+    return urljoin(base_url or final_url, action or final_url)
 
 
 def try_auto_accept(portal_url, base_url=None):
@@ -560,7 +645,7 @@ def try_auto_accept(portal_url, base_url=None):
     jar = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
     try:
-        req = urllib.request.Request(portal_url, headers={"User-Agent": "Mozilla/5.0"})
+        req = urllib.request.Request(portal_url, headers=BROWSER_HEADERS)
         with opener.open(req, timeout=10) as resp:
             final_url = resp.url
             html_content = resp.read().decode("utf-8", errors="replace")
@@ -571,22 +656,28 @@ def try_auto_accept(portal_url, base_url=None):
 
     parser = PortalFormParser()
     parser.feed(html_content)
+    form = _select_portal_form(parser)
+    if form is None:
+        log("Captive portal auto-accept: no safe accept form found")
+        return False
 
-    action = parser.form_action
-    if not action:
-        action = portal_url
+    action = form.get("action") or final_url
 
-    post_url = urljoin(base_url or final_url, action)
+    post_url = _portal_submit_url(final_url, action, base_url)
     if urlparse(post_url).scheme not in ("http", "https"):
         return False
     log(f"Captive portal auto-accept: submitting {post_url}")
     data = {}
-    for f in parser.fields:
+    selected_submit = form.get("accept_submit")
+    for f in form.get("fields", []):
         name = f.get("name", "")
         val = f.get("value", "")
         ftype = f.get("type", "")
         if name:
             label = f"{name} {val}".lower()
+            if f is selected_submit:
+                data[name] = val
+                continue
             if ftype == "checkbox":
                 lv = val.lower()
                 if lv in ("", "agree", "accept", "yes", "1", "true") or _has_accept_word(
@@ -595,6 +686,8 @@ def try_auto_accept(portal_url, base_url=None):
                     data[name] = val if val else "agree"
             elif ftype == "submit" and _has_accept_word(label):
                 data[name] = val if val else "Submit"
+            elif ftype in ("submit", "button", "reset", "image", "file"):
+                continue
             else:
                 data[name] = val if val else ""
 
@@ -603,17 +696,25 @@ def try_auto_accept(portal_url, base_url=None):
 
     encoded = urlencode(data)
     try:
-        if parser.form_method == "get":
+        if form.get("method", "get") == "get":
             sep = "&" if "?" in post_url else "?"
             req2 = urllib.request.Request(
                 post_url + sep + encoded,
-                headers={"User-Agent": "Mozilla/5.0"},
+                headers={**BROWSER_HEADERS, "Referer": final_url},
             )
         else:
+            headers = {
+                **BROWSER_HEADERS,
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Referer": final_url,
+            }
+            origin = _origin_for(final_url)
+            if origin:
+                headers["Origin"] = origin
             req2 = urllib.request.Request(
                 post_url,
                 data=encoded.encode(),
-                headers={"User-Agent": "Mozilla/5.0"},
+                headers=headers,
             )
         with opener.open(req2, timeout=10):
             pass
