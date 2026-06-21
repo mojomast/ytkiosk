@@ -80,9 +80,11 @@ Both are optional for core playback.
 
 ## Captive Portals
 
-When normal connectivity checks fail, YTKiosk tries plain HTTP trigger URLs such
-as `http://1.1.1.1/` and `http://neverssl.com/`. These URLs commonly get
-intercepted by hospital, hotel, and public WiFi captive portals. If a portal
-page is found, YTKiosk attempts best-effort in-app auto-accept by submitting
-forms with common accept/agree/continue/connect buttons, then retries in-app
-instead of automatically opening an external browser.
+When normal connectivity checks discover a portal URL, YTKiosk tries that URL
+first and shows the exact page currently being attempted in the dialog. If no
+portal URL is discovered after repeated attempts, it falls back to plain HTTP
+trigger URLs such as `http://1.1.1.1/` and `http://neverssl.com/`, which are
+often intercepted by hospital, hotel, and public WiFi captive portals. YTKiosk
+attempts best-effort in-app auto-accept by submitting forms with common
+accept/agree/continue/connect buttons, then retries in-app instead of
+automatically opening an external browser.

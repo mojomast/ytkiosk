@@ -449,11 +449,13 @@ class PortalFormParser(html.parser.HTMLParser):
 
 
 def try_auto_accept(portal_url, base_url=None):
+    log(f"Captive portal auto-accept: fetching {portal_url}")
     try:
         req = urllib.request.Request(portal_url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             html_content = resp.read().decode("utf-8", errors="replace")
-    except Exception:
+    except Exception as e:
+        log(f"Captive portal fetch failed for {portal_url}: {e}")
         return False
 
 
@@ -467,6 +469,7 @@ def try_auto_accept(portal_url, base_url=None):
     post_url = urljoin(base_url or portal_url, action)
     if urlparse(post_url).scheme not in ("http", "https"):
         return False
+    log(f"Captive portal auto-accept: submitting {post_url}")
     data = {}
     for f in parser.fields:
         name = f.get("name", "")
@@ -494,24 +497,33 @@ def try_auto_accept(portal_url, base_url=None):
         with urllib.request.urlopen(req2, timeout=10):
             pass
         return True
-    except Exception:
+    except Exception as e:
+        log(f"Captive portal submit failed for {post_url}: {e}")
         return False
 
 
-def try_auto_accept_any(portal_url=None):
+def captive_portal_attempt_urls(portal_url=None, include_triggers=False):
     urls = []
     if portal_url:
         urls.append(portal_url)
-    urls.extend(CAPTIVE_PORTAL_TRIGGER_URLS)
+    if include_triggers or not portal_url:
+        urls.extend(CAPTIVE_PORTAL_TRIGGER_URLS)
 
     seen = set()
+    result = []
     for url in urls:
-        if not url or url in seen:
-            continue
-        seen.add(url)
+        if url and url not in seen:
+            result.append(url)
+            seen.add(url)
+    return result
+
+def try_auto_accept_any(portal_url=None, include_triggers=False, on_attempt=None):
+    for url in captive_portal_attempt_urls(portal_url, include_triggers):
+        if on_attempt:
+            on_attempt(url)
         if try_auto_accept(url):
-            return True
-    return False
+            return True, url
+    return False, None
 
 
 def handle_captive_portal(root, on_done):
@@ -535,21 +547,40 @@ def handle_captive_portal(root, on_done):
         msg.pack(pady=20)
 
         status_var = tk.StringVar(value=FR["connectivity_check"])
-        status_lbl = tk.Label(dlg, textvariable=status_var, font=("TkDefaultFont", 12))
+        status_lbl = tk.Message(
+            dlg, textvariable=status_var, font=("TkDefaultFont", 12), width=460
+        )
         status_lbl.pack(pady=5)
 
+        attempt_count = [0]
+
+        def _set_attempt_status(url):
+            status_var.set(f"Tentative {attempt_count[0]} :\n{url}")
+            log(f"Captive portal attempt {attempt_count[0]}: {url}")
+            dlg.update_idletasks()
+
         def _try_auto():
-            status_var.set("Tentative d'acceptation automatique...")
+            attempt_count[0] += 1
+            status_var.set(f"Tentative automatique {attempt_count[0]}...")
             dlg.update()
-            accepted = try_auto_accept_any(portal_url)
+            include_triggers = portal_url is None or attempt_count[0] > 2
+            accepted, accepted_url = try_auto_accept_any(
+                portal_url,
+                include_triggers=include_triggers,
+                on_attempt=_set_attempt_status,
+            )
             if accepted:
+                status_var.set(f"Formulaire envoyé :\n{accepted_url}")
                 time.sleep(1)
                 still = detect_captive_portal()[0]
                 if not still:
                     status_var.set(FR["portal_auto_ok"])
                     dlg.after(1000, lambda: _done(True))
                     return
-            status_var.set("Portail détecté. Nouvelle tentative automatique...")
+            status_var.set(
+                "Portail toujours détecté.\n"
+                "Nouvelle tentative automatique dans 3 secondes..."
+            )
             dlg.after(3000, _try_auto)
 
         def _open_browser(url):
@@ -589,7 +620,7 @@ def handle_captive_portal(root, on_done):
         btn_frame.pack(pady=10)
         tk.Button(
             btn_frame, text=FR["retry"], font=("TkDefaultFont", 14),
-            command=lambda: _done(True)
+            command=_try_auto
         ).pack(side=tk.LEFT, padx=10)
         tk.Button(
             btn_frame, text=FR["cancel"], font=("TkDefaultFont", 14),
