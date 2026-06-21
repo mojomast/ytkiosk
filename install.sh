@@ -8,25 +8,29 @@ if [[ "$(uname -s)" != "Linux" ]]; then
   exit 1
 fi
 
-if command -v apt-get >/dev/null 2>&1; then
-  sudo apt-get update
-  sudo apt-get install -y \
-    ca-certificates \
-    curl \
-    git \
-    mpv \
-    python3 \
-    python3-tk \
-    x11-xserver-utils \
-    xdg-utils
-else
-  echo "apt-get not found; install python3, python3-tk, mpv, git, curl, xset, and xdg-open manually." >&2
-fi
+export PATH="$HOME/.local/bin:$HOME/.deno/bin:$PATH"
 
-if ! command -v yt-dlp >/dev/null 2>&1; then
-  sudo curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
-    -o /usr/local/bin/yt-dlp
-  sudo chmod 755 /usr/local/bin/yt-dlp
+missing_system=()
+command -v python3 >/dev/null 2>&1 || missing_system+=(python3)
+python3 - <<'PY' >/dev/null 2>&1 || missing_system+=(python3-tk)
+import tkinter
+PY
+command -v mpv >/dev/null 2>&1 || missing_system+=(mpv)
+command -v git >/dev/null 2>&1 || missing_system+=(git)
+command -v curl >/dev/null 2>&1 || missing_system+=(curl)
+command -v xset >/dev/null 2>&1 || missing_system+=(x11-xserver-utils)
+command -v xdg-open >/dev/null 2>&1 || missing_system+=(xdg-utils)
+
+if ((${#missing_system[@]})); then
+  if command -v apt-get >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1; then
+    echo "Installing missing system packages with sudo: ${missing_system[*]}"
+    sudo apt-get update
+    sudo apt-get install -y ca-certificates "${missing_system[@]}"
+  else
+    echo "Missing system packages: ${missing_system[*]}" >&2
+    echo "Install them with your OS package manager, then rerun this installer." >&2
+    echo "Continuing with user-space Python/Deno installation where possible." >&2
+  fi
 fi
 
 if ! command -v deno >/dev/null 2>&1; then
@@ -42,6 +46,7 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 uv tool install --force "git+$REPO_URL"
+uv tool install --force yt-dlp
 
 echo
 echo "YTKiosk installed. Run: ytkiosk"

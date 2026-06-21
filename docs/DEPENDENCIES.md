@@ -16,6 +16,10 @@ For end users, the intended direction is a Linux release bundle that includes
 the Python app, Python dependencies, and Deno when needed. `mpv` remains a
 system dependency installed by the distro package manager.
 
+The one-line installer is user-space first. It installs `uv`, YTKiosk,
+`yt-dlp`, and Deno under the current user when possible. It only uses `sudo apt`
+when required system components such as `mpv` or `python3-tk` are missing.
+
 ## Dependency Decisions
 
 | Dependency | Decision | Reason |
@@ -49,7 +53,8 @@ Runtime discovery order is:
 2. `YTKIOSK_DENO`
 3. packaged `ytkiosk/bin/deno`
 4. `PATH`
-5. `/usr/local/bin/deno`
+5. `~/.deno/bin/deno`
+6. `/usr/local/bin/deno`
 
 When the monolith's playlist fetching is migrated, yt-dlp should receive an
 explicit runtime argument like:

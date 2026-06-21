@@ -37,10 +37,16 @@ def resolve_deno(configured_path: str | None = None) -> Path | None:
     if bundled is not None:
         return bundled
 
-    found = shutil.which("deno") or "/usr/local/bin/deno"
-    path = Path(found)
-    if path.is_file() and os.access(path, os.X_OK):
-        return path
+    for value in (
+        shutil.which("deno"),
+        Path.home() / ".deno" / "bin" / "deno",
+        "/usr/local/bin/deno",
+    ):
+        if value is None:
+            continue
+        path = Path(value)
+        if path.is_file() and os.access(path, os.X_OK):
+            return path
     return None
 
 
