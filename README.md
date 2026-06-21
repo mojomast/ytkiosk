@@ -95,10 +95,10 @@ sudo install -m 755 "$HOME/.deno/bin/deno" /usr/local/bin/deno
 One-line install for Debian, Ubuntu, and Linux Mint:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mojomast/ytkiosk/main/install.sh | bash
+curl -fsSL 'https://raw.githubusercontent.com/mojomast/ytkiosk/main/install.sh?v=2026-06-21.2' | bash
 ```
 
-The installer is user-space first: it installs `uv`, YTKiosk, `yt-dlp`, and Deno under your account when possible. It downloads YTKiosk as a source tarball, so it does not require Git. It only asks for `sudo` if required system components such as `mpv` or `python3-tk` are missing, because those cannot be reliably installed inside a Python venv.
+The installer is user-space first: it installs `uv`, creates a dedicated venv in `~/.local/share/ytkiosk/venv`, installs YTKiosk and `yt-dlp` there, writes wrappers to `~/.local/bin`, and installs Deno under your account when possible. It downloads YTKiosk as a source tarball, so it does not require Git. It only asks for `sudo` if required system components such as `mpv` or `python3-tk` are missing, because those cannot be reliably installed inside a Python venv.
 
 Manual install:
 

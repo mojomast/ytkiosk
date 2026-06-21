@@ -16,9 +16,11 @@ For end users, the intended direction is a Linux release bundle that includes
 the Python app, Python dependencies, and Deno when needed. `mpv` remains a
 system dependency installed by the distro package manager.
 
-The one-line installer is user-space first. It installs `uv`, YTKiosk,
-`yt-dlp`, and Deno under the current user when possible. It only uses `sudo apt`
-when required system components such as `mpv` or `python3-tk` are missing.
+The one-line installer is user-space first. It installs `uv`, creates a venv at
+`~/.local/share/ytkiosk/venv`, installs YTKiosk and `yt-dlp` into that venv,
+writes wrappers to `~/.local/bin`, and installs Deno under the current user when
+possible. It only uses `sudo apt` when required system components such as `mpv`
+or `python3-tk` are missing.
 It installs YTKiosk from a GitHub source tarball instead of `git+https`, so it
 does not depend on Git or Git's HTTPS remote helper.
 

@@ -2,6 +2,9 @@
 set -euo pipefail
 
 SOURCE_URL="${YTKIOSK_SOURCE_URL:-https://github.com/mojomast/ytkiosk/archive/refs/heads/main.tar.gz}"
+INSTALL_VERSION="2026-06-21.2"
+APP_DIR="${YTKIOSK_APP_DIR:-$HOME/.local/share/ytkiosk}"
+BIN_DIR="$HOME/.local/bin"
 
 if [[ "$(uname -s)" != "Linux" ]]; then
   echo "YTKiosk is Linux-only." >&2
@@ -9,6 +12,7 @@ if [[ "$(uname -s)" != "Linux" ]]; then
 fi
 
 export PATH="$HOME/.local/bin:$HOME/.deno/bin:$PATH"
+echo "YTKiosk installer $INSTALL_VERSION"
 
 missing_system=()
 command -v python3 >/dev/null 2>&1 || missing_system+=(python3)
@@ -46,10 +50,28 @@ fi
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 curl -fsSL "$SOURCE_URL" | tar -xz -C "$tmpdir" --strip-components=1
-uv tool install --force "$tmpdir"
-uv tool install --force yt-dlp
+mkdir -p "$APP_DIR" "$BIN_DIR"
+uv venv --clear "$APP_DIR/venv"
+uv pip install --python "$APP_DIR/venv/bin/python" "$tmpdir" yt-dlp
+
+cat > "$BIN_DIR/ytkiosk" <<EOF
+#!/usr/bin/env bash
+export PATH="\$HOME/.local/bin:\$HOME/.deno/bin:\$PATH"
+exec "$APP_DIR/venv/bin/ytkiosk" "\$@"
+EOF
+cat > "$BIN_DIR/ytkiosk-doctor" <<EOF
+#!/usr/bin/env bash
+export PATH="\$HOME/.local/bin:\$HOME/.deno/bin:\$PATH"
+exec "$APP_DIR/venv/bin/ytkiosk-doctor" "\$@"
+EOF
+cat > "$BIN_DIR/yt-dlp" <<EOF
+#!/usr/bin/env bash
+exec "$APP_DIR/venv/bin/yt-dlp" "\$@"
+EOF
+chmod +x "$BIN_DIR/ytkiosk" "$BIN_DIR/ytkiosk-doctor" "$BIN_DIR/yt-dlp"
 
 echo
 echo "YTKiosk installed. Run: ytkiosk"
+echo "If your shell cannot find it, add ~/.local/bin to PATH or run: $BIN_DIR/ytkiosk"
 echo "Checking runtime dependencies:"
-ytkiosk-doctor || true
+"$BIN_DIR/ytkiosk-doctor" || true
