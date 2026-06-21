@@ -33,7 +33,7 @@ def find_keyword_buttons(widget):
                 continue
             if text and text not in (
                 mod.FR["add_keyword"], mod.FR["edit"], mod.FR["exit"],
-                mod.FR["help"], mod.FR["debug"],
+                mod.FR["help"], mod.FR["debug"], mod.FR["options"],
             ) and text not in (
                 mod.FR["control_play"], mod.FR["control_pause"],
                 mod.FR["control_next"], mod.FR["control_prev"],
@@ -223,26 +223,28 @@ def test_debug_button():
     return debug_btn is not None
 
 
-def test_exit_button():
+def test_options_button():
     root = tk.Tk()
     root.withdraw()
     app = SimpleVideoPlayer(root)
     root.update_idletasks()
 
+    options_btn = None
     exit_btn = None
     for child in app.top_bar.winfo_children():
+        if isinstance(child, tk.Button) and child.cget("text") == mod.FR["options"]:
+            options_btn = child
         if isinstance(child, tk.Button) and child.cget("text") == mod.FR["exit"]:
             exit_btn = child
-            break
 
-    if exit_btn:
-        print("Exit button found in top bar (good)")
+    if options_btn and exit_btn is None:
+        print("Options button found and direct Exit hidden (good)")
     else:
-        print("ERROR: Exit button not found!")
+        print("ERROR: Options button missing or direct Exit visible!")
 
     app._cleanup()
     root.destroy()
-    return exit_btn is not None
+    return options_btn is not None and exit_btn is None
 
 
 if __name__ == "__main__":
@@ -263,8 +265,8 @@ if __name__ == "__main__":
     print("\n--- Test 5: Help button present ---")
     test_help_button()
 
-    print("\n--- Test 6: Exit button present ---")
-    test_exit_button()
+    print("\n--- Test 6: Options button present ---")
+    test_options_button()
 
     print("\n--- Test 7: Debug button present ---")
     test_debug_button()

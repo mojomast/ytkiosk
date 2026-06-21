@@ -9,6 +9,10 @@ Hospital-grade kiosk YouTube player for Linux Mint. Designed for elderly patient
 - Click a keyword → searches YouTube → fetches **30 videos** → filters long (≥5 min) → picks **20 random long ones** → auto-plays in shuffled order
 - On-screen controls: pause/next/prev/volume/stop/return-to-keywords
 - **Persistent keywords** saved to `~/.config/yt-player/keywords.json`
+- **Persistent language/CC/pin preferences** saved to `~/.config/yt-player/config.json`
+- **Favorites playlist** saved to `~/.config/yt-player/favorites.json`
+- Runtime EN/FR UI toggle, CC toggle, audio-track cycling, auto-hide playback bars, and password-protected Options menu
+- Configurable application title plus caregiver control over keyword add/edit visibility
 - Help dialog and Debug console for caregivers/testers
 - Exit with confirmation dialog
 - Captive portal detection & auto-accept tuned for the CISSS Côte-Nord guest WiFi portal
@@ -87,14 +91,14 @@ See `docs/DEPENDENCIES.md`, `docs/RELEASE.md`, and
 The README one-line install is the primary deployment path:
 
 ```bash
-curl -fsSL 'https://raw.githubusercontent.com/mojomast/ytkiosk/main/install.sh?v=2026-06-21.3' | bash
+curl -fsSL 'https://raw.githubusercontent.com/mojomast/ytkiosk/main/install.sh?v=2026-06-21.5' | bash
 ```
 
 It downloads `install.sh` from `main`; the installer downloads
 `https://github.com/mojomast/ytkiosk/archive/refs/heads/main.tar.gz`, recreates
 `~/.local/share/ytkiosk/venv`, installs the package, and refreshes wrappers in
 `~/.local/bin`. Existing `~/.config/yt-player/keywords.json` and state are
-preserved.
+preserved, including the new `config.json` preferences and `favorites.json`.
 
 Useful installed commands:
 - `ytkiosk` launches the GUI.
@@ -144,7 +148,7 @@ User clicks keyword (e.g. "Voitures classiques")
   │         [20 shuffled YouTube URLs...]
   │
   └─► Controls enabled (IPC socket)
-        ⏮  ▶/⏸  ⏭  |  Volume [===]  |  Arrêter  Mots-clés
+        ⏮  ▶/⏸  ⏭  CC  Audio  ♥  |  Volume [===]  |  Arrêter  Mots-clés
 ```
 
 ### New: Search & Playlist Algorithm
@@ -157,7 +161,7 @@ User clicks keyword (e.g. "Voitures classiques")
 ### New: Embedded mpv (tkinter + X11/XWayland)
 ```
 Main Window (fullscreen)
-  ├── Top Bar: [Aide]  [QUITTER]
+  ├── Top Bar: [Aide] [Debug] [EN/FR] [Épingler/Pin] [⚙ Options]
   ├── Main Area (fill both)
   │     ├── [Keyword View]  ← visible when choosing
   │     ├── [Loading Label] ← visible during search
@@ -214,10 +218,19 @@ Debugging:
 - Captive portal logs include fetch status/final URL/content type, selected form action/post URL, field names/types, submitted field names, submit status/final URL, and retry outcomes.
 
 Config overrides in `~/.config/yt-player/config.json`:
+- `language`: `"fr"` or `"en"`; defaults to `"fr"`.
+- `cc_enabled`: boolean for subtitles/closed captions; defaults to `false`.
+- `pin_controls`: boolean to disable playback control auto-hide; defaults to `false`.
+- `app_title`: custom title shown in the window/title heading; defaults to the active localized title.
+- `allow_keyword_changes`: boolean to show/hide add/edit keyword controls; defaults to `true`.
+- `options_password`: password for the caregiver Options menu; defaults to `"baloney"`.
 - `captive_portal_urls`: string comma list or JSON list of portal URLs.
 - `enable_captive_portal_trigger_urls`: boolean to re-enable generic trigger URLs.
 - `post_portal_search_retries`: integer retry count after portal acceptance.
 - `post_portal_retry_delay`: integer seconds between post-portal search retries.
+
+Favorites are stored in `~/.config/yt-player/favorites.json` as an array of
+`{"id": "<yt_id>", "title": "<title>", "duration": <seconds>, "added": "<ISO8601>"}`.
 
 ## Key Architecture Decisions
 
@@ -269,8 +282,11 @@ mpv now renders inside the tkinter window via X11/XWayland embedding. Native Way
 1. **X11-oriented embedding** — mpv uses Tk's X11 window ID via `--wid`; native Wayland embedding is unsupported and falls back to standalone fullscreen mpv.
 2. **Captive portal auto-accept is deployment-tuned** — currently optimized for CISSS Côte-Nord. Other portals may need config changes or new parser rules.
 3. **Daemon worker threads** — stale playback startup callbacks are session-guarded, but workers are still daemon threads during app shutdown.
-4. **Duration filter may be too aggressive** — `MIN_DURATION=300` (5 min) might filter out good content for some keywords. Adjust config if needed.
-5. **yt-dlp rate limiting** — YouTube may throttle after repeated requests. Add `--sleep-requests 1` if issues arise.
+4. **Audio track cycling depends on source media** — the Audio button only changes language when a video exposes multiple audio tracks to mpv.
+5. **Subtitle availability varies** — CC asks mpv for best subtitles and prefers `fr,en` or `en,fr`, but YouTube videos may not expose matching captions.
+6. **Options password is a kiosk guardrail** — it is stored in plain text in `config.json`, not hashed or encrypted.
+7. **Duration filter may be too aggressive** — `MIN_DURATION=300` (5 min) might filter out good content for some keywords. Adjust config if needed.
+8. **yt-dlp rate limiting** — YouTube may throttle after repeated requests. Add `--sleep-requests 1` if issues arise.
 
 ## Running Tests
 ```bash
@@ -288,8 +304,11 @@ mkdir -p ~/.config/autostart
 cp yt-player.desktop ~/.config/autostart/
 ```
 
-## French Strings
-All UI strings in `FR` dict (lines 30–75). Change these to translate to another language. Keywords in `INITIAL_KEYWORDS` (lines 77–82).
+## Language Strings
+All UI strings live in `STRINGS_FR` and `STRINGS_EN` near the top of
+`src/ytkiosk/legacy.py`; tests assert both dictionaries have matching keys.
+The active language defaults to French and can be changed at runtime with the
+top-bar EN/FR toggle.
 
 ## Key Constants (tunable)
 | Constant | Default | Purpose |

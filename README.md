@@ -23,6 +23,9 @@ YTKiosk closes both gaps. A 10-year-old Core 2 Duo laptop with 2 GB of RAM runs 
 - **Large on-screen controls** — play/pause, skip, volume, stop, return to keywords. Sized for elderly users and touchscreens
 - **Captive portal detection** — auto-detects and accepts hospital/hotel WiFi login pages, often without any user action
 - **Persistent keywords** — saved to `~/.config/yt-player/keywords.json`, survives reboots
+- **Password-protected Options** — small corner ⚙ menu controls title, keyword editing, and quitting; default password is `baloney`
+- **Language, captions, audio, and favorites** — EN/FR toggle, CC toggle, audio-track cycling, and a personal favorites playlist
+- **Auto-hide controls** — playback controls hide after inactivity unless pinned
 - **Exit requires confirmation** — no accidental shutdowns
 
 ---
@@ -98,7 +101,7 @@ curl -fsSL https://deno.land/install.sh | sh
 One-line install for Debian, Ubuntu, and Linux Mint:
 
 ```bash
-curl -fsSL 'https://raw.githubusercontent.com/mojomast/ytkiosk/main/install.sh?v=2026-06-21.3' | bash
+curl -fsSL 'https://raw.githubusercontent.com/mojomast/ytkiosk/main/install.sh?v=2026-06-21.5' | bash
 ```
 
 The installer is user-space first: it installs `uv`, creates a dedicated venv in `~/.local/share/ytkiosk/venv`, installs YTKiosk and `yt-dlp[default]` there, and writes wrappers to `~/.local/bin`. It downloads YTKiosk as a source tarball, so it does not require Git. It only asks for `sudo` if required system components such as `mpv` or `python3-tk` are missing, because those cannot be reliably installed inside a Python venv. Optional helpers such as `xset`, `xdg-open`, `pactl`, and a JavaScript runtime are reported by `ytkiosk-doctor` but do not block install.
@@ -106,7 +109,7 @@ The installer is user-space first: it installs `uv`, creates a dedicated venv in
 To also install Deno during the one-line install:
 
 ```bash
-curl -fsSL 'https://raw.githubusercontent.com/mojomast/ytkiosk/main/install.sh?v=2026-06-21.3' | YTKIOSK_INSTALL_DENO=1 bash
+curl -fsSL 'https://raw.githubusercontent.com/mojomast/ytkiosk/main/install.sh?v=2026-06-21.5' | YTKIOSK_INSTALL_DENO=1 bash
 ```
 
 For a more auditable install, download `install.sh`, inspect it, then run it locally instead of piping directly to `bash`.
@@ -183,7 +186,7 @@ cp yt-player.desktop ~/.config/autostart/
 
 ### Customizing Keywords
 
-Use the ✎ button inside the app to edit keywords, or click **+ Ajouter un mot-clé** to add new ones. Keywords save automatically. You can also edit `INITIAL_KEYWORDS` in `src/ytkiosk/legacy.py` to set the defaults for a fresh install.
+Use the ✎ button inside the app to edit keywords, or click **+ Ajouter un mot-clé** to add new ones. Keywords save automatically. Caregivers can disable keyword adding/editing from the password-protected **⚙ Options** menu. You can also edit `INITIAL_KEYWORDS` in `src/ytkiosk/legacy.py` to set the defaults for a fresh install.
 
 ### Translation
 
@@ -202,6 +205,13 @@ All UI strings live in the language dictionaries near the top of `src/ytkiosk/le
 | `RUNTIME_DIR` | `$XDG_RUNTIME_DIR/yt-player-$UID` or `/tmp/yt-player-$UID` | Private runtime directory for logs and mpv IPC socket |
 | `POST_PORTAL_SEARCH_RETRIES` | 3 | Initial search attempts after captive portal acceptance |
 | `POST_PORTAL_RETRY_DELAY` | 5 | Seconds between post-portal search attempts |
+
+User preferences in `~/.config/yt-player/config.json` are preserved across updates:
+`language` (`"fr"` or `"en"`, default `"fr"`), `cc_enabled` (`true`/`false`),
+`pin_controls` (`true`/`false`), `app_title`, `allow_keyword_changes`
+(`true`/`false`, default `true`), and `options_password` (default `"baloney"`).
+Favorites are stored separately in
+`~/.config/yt-player/favorites.json` as video ID/title/duration/added timestamp entries.
 
 Captive portal defaults are currently tuned for the CISSS Côte-Nord guest WiFi portal. The app tries `https://cisss-public.reg09.rtss.qc.ca/login.html` directly and does not use generic `1.1.1.1` / `neverssl.com` trigger URLs by default. The CISSS portal uses a Cisco-style JavaScript button; YTKiosk emulates that by posting `buttonClicked=4` and `redirect_url=<redirect query value>`, and posts back to the current portal URL when `switch_url` is absent. After portal acceptance, YTKiosk waits briefly for connectivity to settle and retries the first YouTube search before showing an error. To change this later, add `captive_portal_urls`, `enable_captive_portal_trigger_urls`, `post_portal_search_retries`, or `post_portal_retry_delay` to `~/.config/yt-player/config.json`.
 
@@ -229,13 +239,13 @@ while continuing to use distro `mpv` for playback.
 
 ```
 ┌─────────────────────────────────────────────┐
-│  Top Bar: [Aide]               [QUITTER]    │
+│  Top Bar: [Aide] [Debug] [EN] [Épingler]        [⚙] │
 ├─────────────────────────────────────────────┤
 │                                             │
 │  Main Area (Keyword View / Video Embed)     │
 │                                             │
 ├─────────────────────────────────────────────┤
-│  ⏮  ▶  ⏭  | Volume [====] | Arrêter  Mots-clés │
+│  ⏮ ▶ ⏭ CC Audio ♥ | Volume | Arrêter Mots-clés │
 │  En cours: Video Title...                   │
 └─────────────────────────────────────────────┘
 ```
@@ -258,6 +268,9 @@ xvfb-run -a python3 test_integration.py
 - Native Wayland embedding is not supported by the current Tk + `mpv --wid` architecture. X11/Xorg or XWayland gives embedded playback; native Wayland falls back to standalone fullscreen mpv.
 - Captive portal auto-accept works for simple "click agree" portals only
 - Audio backend is detected at playback start; hot-plugged audio devices may require restarting playback
+- Audio track cycling only changes tracks when the current video provides multiple audio tracks
+- Subtitle availability depends on what YouTube/mpv can expose for the current video
+- The Options password is stored in plain text in the per-user config file; it is a kiosk guardrail, not cryptographic security
 
 ---
 

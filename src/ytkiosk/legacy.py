@@ -19,6 +19,7 @@ import sys
 import unicodedata
 from urllib.parse import parse_qs, urljoin, urlparse, urlencode, urlunparse
 import random
+from datetime import datetime, timezone
 
 try:
     from ytkiosk.deno import resolve_js_runtime, yt_dlp_js_runtime_arg
@@ -56,6 +57,8 @@ def _load_config():
 _cfg = _load_config()
 KEYWORDS_FILE = os.path.join(CONFIG_DIR, "keywords.json")
 STATE_FILE = os.path.join(CONFIG_DIR, "state.json")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+FAVORITES_FILE = os.path.join(CONFIG_DIR, "favorites.json")
 _ensure_runtime_dir()
 LOG_FILE = os.path.join(RUNTIME_DIR, "yt-player.log")
 MPV_SOCKET = os.path.join(RUNTIME_DIR, "mpv-socket")
@@ -90,6 +93,13 @@ def _cfg_int(name, default, minimum):
         return value if value >= minimum else default
     except (TypeError, ValueError):
         return default
+
+
+def _cfg_language(default="fr"):
+    value = os.environ.get("YTKIOSK_LANG") or _cfg.get("language", default)
+    if isinstance(value, str) and value.lower().startswith("en"):
+        return "en"
+    return "fr"
 
 
 SEARCH_COUNT = _cfg_int("search_count", 30, 1)
@@ -146,6 +156,8 @@ def _build_mpv_command(
     audio_backend=None,
     ytdlp_path=YTDLP,
     js_runtime=None,
+    language="fr",
+    subtitles_enabled=False,
 ):
     cmd = [MPV, "--osd-level=0"]
     if display_mode == "embedded-x11":
@@ -176,6 +188,10 @@ def _build_mpv_command(
         ]
 
     cmd.append("--ytdl-format=bv[height<=720]+ba/b[height<=720]")
+    lang_order = "fr,en" if language == "fr" else "en,fr"
+    cmd.append(f"--alang={lang_order}")
+    if subtitles_enabled:
+        cmd += ["--sub-auto=best", f"--slang={lang_order}"]
     if ytdlp_path:
         cmd.append(f"--script-opts=ytdl_hook-ytdl_path={ytdlp_path}")
     if js_runtime is not None:
@@ -195,6 +211,14 @@ STRINGS_FR = {
     "title": "Lecteur Vidéo Simple",
     "add_keyword": "+ Ajouter un mot-clé",
     "exit": "QUITTER",
+    "options": "⚙",
+    "options_title": "Options",
+    "options_password_title": "Options protégées",
+    "options_password_prompt": "Mot de passe :",
+    "options_password_bad": "Mot de passe incorrect.",
+    "app_title_label": "Titre de l'application :",
+    "allow_keyword_changes": "Permettre l'ajout et la modification des mots-clés",
+    "save": "Enregistrer",
     "edit": "✎",
     "edit_title": "Modifier le mot-clé",
     "edit_prompt": "Entrez un nouveau mot-clé :",
@@ -250,7 +274,7 @@ STRINGS_FR = {
         "Les vidéos longues sont prioritaires.\n"
         "La liste de lecture est mélangée aléatoirement.\n"
         "Les mots-clés sont sauvegardés automatiquement.\n\n"
-        "POUR QUITTER : cliquez sur QUITTER puis confirmez."
+        "POUR QUITTER : ouvrez Options (⚙), entrez le mot de passe, puis confirmez."
     ),
     "confirm_exit_title": "Confirmation",
     "confirm_exit_msg": "Êtes-vous sûr de vouloir quitter ?",
@@ -258,12 +282,30 @@ STRINGS_FR = {
     "no": "Non",
     "loading_duration": "Vérification des durées...",
     "playlist_ended": "Liste de lecture terminée",
+    "language_toggle": "EN",
+    "pin": "📌 Épingler",
+    "unpin": "📌 Épinglé",
+    "cc": "CC",
+    "audio_fr": "Audio FR",
+    "audio_en": "Audio EN",
+    "favorite": "♥",
+    "favorites": "Favoris",
+    "no_favorites": "Aucun favori pour l'instant.",
+    "close": "Fermer",
 }
 
 STRINGS_EN = {
     "title": "Simple Video Player",
     "add_keyword": "+ Add keyword",
     "exit": "QUIT",
+    "options": "⚙",
+    "options_title": "Options",
+    "options_password_title": "Protected Options",
+    "options_password_prompt": "Password:",
+    "options_password_bad": "Incorrect password.",
+    "app_title_label": "Application title:",
+    "allow_keyword_changes": "Allow adding and editing keywords",
+    "save": "Save",
     "edit": "✎",
     "edit_title": "Edit keyword",
     "edit_prompt": "Enter a new keyword:",
@@ -319,7 +361,7 @@ STRINGS_EN = {
         "Long videos are prioritized.\n"
         "The playlist is shuffled randomly.\n"
         "Keywords are saved automatically.\n\n"
-        "TO EXIT: click EXIT, then confirm."
+        "TO EXIT: open Options (⚙), enter the password, then confirm."
     ),
     "confirm_exit_title": "Confirm",
     "confirm_exit_msg": "Are you sure you want to quit?",
@@ -327,12 +369,22 @@ STRINGS_EN = {
     "no": "No",
     "loading_duration": "Checking durations...",
     "playlist_ended": "Playlist ended",
+    "language_toggle": "FR",
+    "pin": "📌 Pin",
+    "unpin": "📌 Pinned",
+    "cc": "CC",
+    "audio_fr": "Audio FR",
+    "audio_en": "Audio EN",
+    "favorite": "♥",
+    "favorites": "Favorites",
+    "no_favorites": "No favorites yet.",
+    "close": "Close",
 }
 
 _locale = locale.getlocale()
 _default_lang = _locale[0] if isinstance(_locale, tuple) else _locale
-_lang = os.environ.get("YTKIOSK_LANG", _default_lang or "en")
-FR = STRINGS_FR if _lang.startswith("fr") else STRINGS_EN
+_lang = _cfg_language("fr")
+FR = STRINGS_FR if _lang == "fr" else STRINGS_EN
 
 INITIAL_KEYWORDS = [
     "Voitures classiques",
@@ -398,6 +450,14 @@ class MpvRemote:
 
     def get_playlist_count(self):
         return self._send("get_property", ["playlist-count"])
+
+    def cycle_audio(self):
+        """Cycle mpv to the next available audio track."""
+        self._send("cycle", ["audio"])
+
+    def get_current_audio_track(self):
+        """Return mpv metadata for the currently active audio track."""
+        return self._send("get_property", ["current-tracks/audio"])
 
     def is_running(self):
         return self._send("get_property", ["time-pos"]) is not None
@@ -1052,11 +1112,21 @@ def handle_captive_portal(root, on_done):
 class SimpleVideoPlayer:
     def __init__(self, root):
         self.root = root
-        self.root.title(FR["title"])
 
         self.keywords = self._load_keywords()
+        self.language = _cfg_language("fr")
+        self.cc_enabled = self._load_config_bool("cc_enabled", False)
+        self.pin_controls = self._load_config_bool("pin_controls", False)
+        self.app_title = self._load_config_str("app_title", FR["title"])
+        self._custom_app_title = bool(self._load_config_str("app_title", ""))
+        self.allow_keyword_changes = self._load_config_bool("allow_keyword_changes", True)
+        self.options_password = self._load_config_str("options_password", "baloney")
+        self.favorites = self._load_favorites()
         self.mpv_proc = None
         self.current_keyword = None
+        self.current_playlist = []
+        self.current_video = None
+        self._last_playlist_pos = None
         self.mpv = MpvRemote()
         self._paused = False
         self._volume = 75
@@ -1065,7 +1135,11 @@ class SimpleVideoPlayer:
         self._loading = False
         self._playlist_ending = False
         self._volume_save_after_id = None
+        self._autohide_after_id = None
+        self._controls_hidden = False
         self._session_id = 0
+
+        self.root.title(self.app_title)
 
         self._setup_kiosk()
         self._build_ui()
@@ -1077,7 +1151,7 @@ class SimpleVideoPlayer:
         self.root.attributes("-fullscreen", True)
         self.root.focus_force()
 
-        self.root.protocol("WM_DELETE_WINDOW", self._confirm_exit)
+        self.root.protocol("WM_DELETE_WINDOW", lambda: None)
 
         try:
             subprocess.run(
@@ -1091,6 +1165,8 @@ class SimpleVideoPlayer:
 
         for key in ("<Escape>", "<F11>", "<Control-q>"):
             self.root.bind(key, lambda e: "break")
+        for event in ("<Motion>", "<KeyPress>", "<ButtonPress>"):
+            self.root.bind_all(event, self._reset_autohide_timer, add="+")
 
     def _build_ui(self):
         self.root.grid_rowconfigure(0, weight=0)
@@ -1142,28 +1218,43 @@ class SimpleVideoPlayer:
         )
         self.debug_btn.pack(side=tk.LEFT, padx=(0, 10), pady=5)
 
+        self.lang_btn = tk.Button(
+            self.top_bar, text=FR["language_toggle"], font=("TkDefaultFont", 14),
+            command=self._toggle_language, bg="#444", fg="white",
+            relief=tk.FLAT, padx=15, pady=5,
+        )
+        self.lang_btn.pack(side=tk.LEFT, padx=(0, 10), pady=5)
+
+        self.pin_btn = tk.Button(
+            self.top_bar, text=FR["unpin"] if self.pin_controls else FR["pin"],
+            font=("TkDefaultFont", 14), command=self._toggle_pin_controls,
+            bg="#666" if self.pin_controls else "#444", fg="white",
+            relief=tk.FLAT, padx=15, pady=5,
+        )
+        self.pin_btn.pack(side=tk.LEFT, padx=(0, 10), pady=5)
+
         self.status_label = tk.Label(
             self.top_bar, text="", font=("TkDefaultFont", 11),
             fg="#aaaaaa", bg="#2a2a2a", anchor="w",
         )
         self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=15)
 
-        self.exit_btn = tk.Button(
-            self.top_bar, text=FR["exit"], font=("TkDefaultFont", 14, "bold"),
-            command=self._confirm_exit, bg="#cc0000", fg="white",
-            relief=tk.FLAT, padx=20, pady=5,
+        self.options_btn = tk.Button(
+            self.top_bar, text=FR["options"], font=("TkDefaultFont", 12, "bold"),
+            command=self._show_options, bg="#444", fg="white",
+            relief=tk.FLAT, padx=10, pady=3,
         )
-        self.exit_btn.pack(side=tk.RIGHT, padx=10, pady=5)
+        self.options_btn.pack(side=tk.RIGHT, padx=8, pady=5)
 
     def _build_keyword_view(self):
         container = tk.Frame(self.keyword_frame, bg="#1a1a1a")
         container.pack(fill=tk.BOTH, expand=True, padx=40, pady=30)
 
-        title_lbl = tk.Label(
-            container, text=FR["title"], font=("TkDefaultFont", 26, "bold"),
+        self.title_lbl = tk.Label(
+            container, text=self.app_title, font=("TkDefaultFont", 26, "bold"),
             fg="white", bg="#1a1a1a",
         )
-        title_lbl.pack(pady=(0, 20))
+        self.title_lbl.pack(pady=(0, 20))
 
         inner_frame = tk.Frame(container, bg="#1a1a1a")
         inner_frame.pack(fill=tk.BOTH, expand=True)
@@ -1192,6 +1283,15 @@ class SimpleVideoPlayer:
         for w in self.kw_scrollable.winfo_children():
             w.destroy()
 
+        fav_row = tk.Frame(self.kw_scrollable, bg="#1a1a1a")
+        fav_row.pack(fill=tk.X, pady=(0, 10))
+        fav_btn = tk.Button(
+            fav_row, text=FR["favorites"], font=("TkDefaultFont", 20, "bold"),
+            command=self._on_favorites_click,
+            bg="#5a2222", fg="white", relief=tk.RAISED, padx=10, pady=8,
+        )
+        fav_btn.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
         for i, kw in enumerate(self.keywords):
             row = tk.Frame(self.kw_scrollable, bg="#1a1a1a")
             row.pack(fill=tk.X, pady=4)
@@ -1203,22 +1303,26 @@ class SimpleVideoPlayer:
             )
             btn.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-            edit_btn = tk.Button(
-                row, text=FR["edit"], font=("TkDefaultFont", 14),
-                width=3, command=lambda idx=i: self._edit_keyword(idx),
-                bg="#555", fg="white", relief=tk.RAISED, pady=8,
-            )
-            edit_btn.pack(side=tk.RIGHT, padx=(5, 0))
+            if self.allow_keyword_changes:
+                edit_btn = tk.Button(
+                    row, text=FR["edit"], font=("TkDefaultFont", 14),
+                    width=3, command=lambda idx=i: self._edit_keyword(idx),
+                    bg="#555", fg="white", relief=tk.RAISED, pady=8,
+                )
+                edit_btn.pack(side=tk.RIGHT, padx=(5, 0))
 
-        add_btn = tk.Button(
-            self.kw_scrollable, text=FR["add_keyword"],
-            font=("TkDefaultFont", 18),
-            command=self._on_add_keyword,
-            bg="#2a6b2a", fg="white", relief=tk.RAISED, padx=10, pady=8,
-        )
-        add_btn.pack(fill=tk.X, pady=(12, 0))
+        if self.allow_keyword_changes:
+            add_btn = tk.Button(
+                self.kw_scrollable, text=FR["add_keyword"],
+                font=("TkDefaultFont", 18),
+                command=self._on_add_keyword,
+                bg="#2a6b2a", fg="white", relief=tk.RAISED, padx=10, pady=8,
+            )
+            add_btn.pack(fill=tk.X, pady=(12, 0))
 
     def _edit_keyword(self, idx):
+        if not self.allow_keyword_changes:
+            return
         old = self.keywords[idx]
         new = simpledialog.askstring(
             FR["edit_title"], FR["edit_prompt"],
@@ -1230,6 +1334,8 @@ class SimpleVideoPlayer:
             self._save_keywords()
 
     def _on_add_keyword(self):
+        if not self.allow_keyword_changes:
+            return
         kw = simpledialog.askstring(
             FR["add_title"], FR["add_prompt"], parent=self.root,
         )
@@ -1262,6 +1368,28 @@ class SimpleVideoPlayer:
             bg="#444", fg="white", relief=tk.RAISED,
         )
         self.next_btn.pack(side=tk.LEFT, padx=3)
+
+        self.cc_btn = tk.Button(
+            inner, text=FR["cc"], font=("TkDefaultFont", 16, "bold"),
+            width=3, command=self._toggle_cc,
+            bg="#2a6b2a" if self.cc_enabled else "#444",
+            fg="white", relief=tk.RAISED,
+        )
+        self.cc_btn.pack(side=tk.LEFT, padx=3)
+
+        self.audio_btn = tk.Button(
+            inner, text=self._audio_label(), font=("TkDefaultFont", 14),
+            command=self._cycle_audio, bg="#444", fg="white",
+            relief=tk.RAISED, padx=10, pady=5,
+        )
+        self.audio_btn.pack(side=tk.LEFT, padx=3)
+
+        self.favorite_btn = tk.Button(
+            inner, text=FR["favorite"], font=("TkDefaultFont", 20),
+            width=3, command=self._toggle_favorite,
+            bg="#444", fg="white", relief=tk.RAISED,
+        )
+        self.favorite_btn.pack(side=tk.LEFT, padx=3)
 
         vol_frame = tk.Frame(inner, bg="#2a2a2a")
         vol_frame.pack(side=tk.LEFT, padx=(20, 10))
@@ -1300,11 +1428,89 @@ class SimpleVideoPlayer:
 
     def _set_controls_enabled(self, enabled):
         state = tk.NORMAL if enabled else tk.DISABLED
-        for b in (self.prev_btn, self.play_btn, self.next_btn, self.stop_btn):
+        for b in (
+            self.prev_btn, self.play_btn, self.next_btn, self.stop_btn,
+            self.cc_btn, self.audio_btn, self.favorite_btn,
+        ):
             b.config(state=state)
         self.vol_scale.config(state=state)
 
+    def _audio_label(self, lang=None):
+        """Return the bottom-bar audio label for the active language/track."""
+        lang = (lang or self.language or "fr").lower()
+        return FR["audio_fr"] if lang.startswith("fr") else FR["audio_en"]
+
+    def _refresh_control_states(self):
+        """Refresh CC and favorite button visual state."""
+        self.cc_btn.config(bg="#2a6b2a" if self.cc_enabled else "#444")
+        vid = self.current_video.get("id") if self.current_video else None
+        is_fav = bool(vid) and any(item.get("id") == vid for item in self.favorites)
+        self.favorite_btn.config(bg="#aa2222" if is_fav else "#444")
+
+    def _update_audio_label(self):
+        """Query mpv for the current audio track language and update the label."""
+        track = self.mpv.get_current_audio_track()
+        lang = None
+        if isinstance(track, dict):
+            lang = track.get("lang") or track.get("language")
+        self.audio_btn.config(text=self._audio_label(lang))
+
+    def _refresh_language_text(self):
+        """Update visible static UI labels after a runtime language switch."""
+        if not self._custom_app_title:
+            self.app_title = FR["title"]
+        self.root.title(self.app_title)
+        self.title_lbl.config(text=self.app_title)
+        self.help_btn.config(text=FR["help"])
+        self.debug_btn.config(text=FR["debug"])
+        self.lang_btn.config(text=FR["language_toggle"])
+        self.pin_btn.config(
+            text=FR["unpin"] if self.pin_controls else FR["pin"],
+            bg="#666" if self.pin_controls else "#444",
+        )
+        self.options_btn.config(text=FR["options"])
+        self.cc_btn.config(text=FR["cc"])
+        self.audio_btn.config(text=self._audio_label())
+        self.favorite_btn.config(text=FR["favorite"])
+        self.keyword_btn.config(text=FR["control_keywords"])
+        self.stop_btn.config(text=FR["control_stop"])
+        self.play_btn.config(
+            text=FR["control_play"] if self._paused or not self._playing else FR["control_pause"]
+        )
+        self._rebuild_keyword_buttons()
+        if not self._playing and not self._loading:
+            self.status_label.config(text="")
+
+    def _show_controls(self):
+        """Show playback bars if auto-hide previously removed them."""
+        if not self._controls_hidden:
+            return
+        self.top_bar.grid()
+        self.control_bar.grid()
+        self._controls_hidden = False
+
+    def _hide_controls(self):
+        """Hide playback bars while video is active and controls are not pinned."""
+        if self.pin_controls or not self._playing or self.keyword_frame.winfo_ismapped():
+            return
+        self.top_bar.grid_remove()
+        self.control_bar.grid_remove()
+        self._controls_hidden = True
+
+    def _reset_autohide_timer(self, event=None):
+        """Restart the playback control auto-hide countdown."""
+        if self._autohide_after_id is not None:
+            try:
+                self.root.after_cancel(self._autohide_after_id)
+            except tk.TclError:
+                pass
+            self._autohide_after_id = None
+        self._show_controls()
+        if self._playing and not self.pin_controls and not self.keyword_frame.winfo_ismapped():
+            self._autohide_after_id = self.root.after(10000, self._hide_controls)
+
     def _show_keyword_view(self):
+        self._show_controls()
         self.video_frame.grid_remove()
         self.loading_label.grid_remove()
         self.keyword_frame.grid()
@@ -1315,6 +1521,7 @@ class SimpleVideoPlayer:
         self.keyword_frame.grid_remove()
         self.loading_label.grid_remove()
         self.video_frame.grid()
+        self._reset_autohide_timer()
         self.root.update_idletasks()
         self.root.update()
 
@@ -1344,6 +1551,7 @@ class SimpleVideoPlayer:
     # ── Search and playback ─────────────────────────────────────
 
     def _on_keyword_click(self, keyword):
+        self._reset_autohide_timer()
         if self._loading:
             return
         if self._playing:
@@ -1357,6 +1565,28 @@ class SimpleVideoPlayer:
         threading.Thread(
             target=self._play_keyword, args=(keyword, session_id), daemon=True
         ).start()
+
+    def _on_favorites_click(self):
+        """Start playback from the saved favorites list instead of searching."""
+        self._reset_autohide_timer()
+        if self._loading:
+            return
+        self.favorites = self._load_favorites()
+        if not self.favorites:
+            self.status_label.config(text=FR["no_favorites"])
+            return
+        if self._playing:
+            self._stop_playback()
+        self._session_id += 1
+        session_id = self._session_id
+        self.current_keyword = FR["favorites"]
+        self.current_playlist = list(self.favorites)
+        self.current_video = self.current_playlist[0] if self.current_playlist else None
+        self._last_playlist_pos = None
+        self._playlist_ending = False
+        self._loading = True
+        self._show_loading(FR["fetching"].format(FR["favorites"]))
+        self.root.after(0, lambda: self._start_mpv(self.current_playlist, session_id))
 
     def _play_keyword(self, keyword, session_id):
         try:
@@ -1385,19 +1615,19 @@ class SimpleVideoPlayer:
             if not self._is_active_session(session_id):
                 return
 
-            urls = self._fetch_playlist_with_retries(
+            playlist = self._fetch_playlist_with_retries(
                 keyword,
                 session_id,
                 attempts=POST_PORTAL_SEARCH_RETRIES if portal_resolved else 1,
                 delay=POST_PORTAL_RETRY_DELAY,
             )
 
-            if not urls:
+            if not playlist:
                 self._schedule_error(FR["no_videos"].format(keyword), session_id)
                 return
 
-            log(FR["launching"].format(len(urls)))
-            self.root.after(0, lambda: self._start_mpv(urls, session_id))
+            log(FR["launching"].format(len(playlist)))
+            self.root.after(0, lambda: self._start_mpv(playlist, session_id))
 
         except Exception as e:
             log(f"EXCEPTION: {e}")
@@ -1440,19 +1670,22 @@ class SimpleVideoPlayer:
     def _fetch_playlist(self, keyword):
         log(FR["fetching"].format(keyword))
         js_runtime_args = yt_dlp_js_runtime_arg()
+        search_keyword = f"{keyword} en français" if self.language == "fr" else keyword
+        extractor_args = ["--extractor-args", f"youtube:lang={self.language}"]
 
         try:
             cmd = [
                 YTDLP,
                 *js_runtime_args,
-                f"ytsearch{SEARCH_COUNT}:{keyword}",
+                *extractor_args,
+                f"ytsearch{SEARCH_COUNT}:{search_keyword}",
                 "--flat-playlist",
                 "--ignore-errors",
                 "--match-filters", f"duration > {MIN_DURATION} & !is_live",
                 "--retries", "5",
                 "--fragment-retries", "5",
                 "--socket-timeout", "15",
-                "--print", "%(id)s\t%(duration)s",
+                "--print", "%(id)s\t%(duration)s\t%(title)s",
             ]
             result = subprocess.run(
                 cmd,
@@ -1475,8 +1708,13 @@ class SimpleVideoPlayer:
                     try:
                         vid = parts[0].strip()
                         dur = int(float(parts[1].strip()))
+                        title = parts[2].strip() if len(parts) >= 3 else vid
                         if dur > MIN_DURATION:
-                            candidates.append((vid, dur))
+                            candidates.append({
+                                "id": vid,
+                                "title": title,
+                                "duration": dur,
+                            })
                     except (ValueError, IndexError):
                         pass
 
@@ -1485,18 +1723,20 @@ class SimpleVideoPlayer:
         if not candidates:
             raise Exception(FR["no_videos"].format(keyword))
 
-        candidates.sort(key=lambda x: x[1], reverse=True)
+        candidates.sort(key=lambda x: x["duration"], reverse=True)
 
         selected = candidates[:PLAYLIST_SIZE]
         random.shuffle(selected)
 
-        urls = [f"https://www.youtube.com/watch?v={vid}" for vid, _ in selected]
-        log(f"Playlist: {[v for v, _ in selected]}")
-        return urls
+        log(f"Playlist: {[v['id'] for v in selected]}")
+        return selected
 
-    def _start_mpv(self, urls, session_id):
+    def _start_mpv(self, playlist, session_id):
         if not self._is_active_session(session_id):
             return
+        self.current_playlist = list(playlist)
+        self.current_video = self.current_playlist[0] if self.current_playlist else None
+        self._last_playlist_pos = None
         self._show_video_view()
         fw, fh = self._ensure_video_frame_sized()
         display_info = _detect_mpv_display_mode(self.root)
@@ -1521,12 +1761,14 @@ class SimpleVideoPlayer:
             env.pop("WAYLAND_DISPLAY", None)
 
         cmd = _build_mpv_command(
-            urls,
+            [f"https://www.youtube.com/watch?v={entry['id']}" for entry in playlist],
             display_mode=display_mode,
             window_id=wid,
             audio_backend=_detect_audio_backend(),
             ytdlp_path=YTDLP,
             js_runtime=resolve_js_runtime(),
+            language=self.language,
+            subtitles_enabled=self.cc_enabled,
         )
 
         try:
@@ -1584,6 +1826,9 @@ class SimpleVideoPlayer:
         self._paused = False
         self.vol_scale.set(self._volume)
         self._update_mpv_title()
+        self._update_audio_label()
+        self._refresh_control_states()
+        self._reset_autohide_timer()
 
     def _show_keywords_mode(self):
         if self._playing:
@@ -1604,11 +1849,16 @@ class SimpleVideoPlayer:
         self._set_controls_enabled(False)
         self.play_btn.config(text=FR["control_play"])
         self._paused = False
+        self.current_playlist = []
+        self.current_video = None
+        self._last_playlist_pos = None
+        self._refresh_control_states()
         self.root.config(cursor="")
 
     # ── IPC controls ────────────────────────────────────────────
 
     def _toggle_pause(self):
+        self._reset_autohide_timer()
         self.mpv.toggle_pause()
         self._paused = not self._paused
         self.play_btn.config(
@@ -1617,14 +1867,17 @@ class SimpleVideoPlayer:
         self._update_mpv_title()
 
     def _next_track(self):
+        self._reset_autohide_timer()
         self.mpv.next_track()
         self._update_mpv_title()
 
     def _prev_track(self):
+        self._reset_autohide_timer()
         self.mpv.prev_track()
         self._update_mpv_title()
 
     def _on_volume_change(self, val):
+        self._reset_autohide_timer()
         self._volume = float(val)
         self.mpv.set_volume(self._volume)
         if self._volume_save_after_id is not None:
@@ -1633,6 +1886,143 @@ class SimpleVideoPlayer:
             except tk.TclError:
                 pass
         self._volume_save_after_id = self.root.after(1000, self._save_state)
+
+    def _toggle_language(self):
+        """Switch the active UI/search language and persist the setting."""
+        global FR
+        self._reset_autohide_timer()
+        self.language = "en" if self.language == "fr" else "fr"
+        FR = STRINGS_FR if self.language == "fr" else STRINGS_EN
+        self._save_config_value("language", self.language)
+        self._refresh_language_text()
+
+    def _toggle_cc(self):
+        """Toggle closed captions for future playback launches."""
+        self._reset_autohide_timer()
+        self.cc_enabled = not self.cc_enabled
+        self._save_config_value("cc_enabled", self.cc_enabled)
+        self._refresh_control_states()
+
+    def _cycle_audio(self):
+        """Ask mpv to cycle audio tracks and refresh the audio button label."""
+        self._reset_autohide_timer()
+        self.mpv.cycle_audio()
+        self.root.after(300, self._update_audio_label)
+
+    def _toggle_favorite(self):
+        """Add or remove the current video from the favorites file."""
+        self._reset_autohide_timer()
+        if not self.current_video:
+            return
+        vid = self.current_video.get("id")
+        if not vid:
+            return
+        self.favorites = self._load_favorites()
+        if any(item.get("id") == vid for item in self.favorites):
+            self.favorites = [item for item in self.favorites if item.get("id") != vid]
+        else:
+            entry = {
+                "id": vid,
+                "title": self.current_video.get("title") or vid,
+                "duration": int(self.current_video.get("duration") or 0),
+                "added": datetime.now(timezone.utc).isoformat(),
+            }
+            self.favorites.append(entry)
+        self._save_favorites()
+        self._refresh_control_states()
+
+    def _toggle_pin_controls(self):
+        """Persistently enable or disable auto-hide for playback controls."""
+        self._reset_autohide_timer()
+        self.pin_controls = not self.pin_controls
+        self._save_config_value("pin_controls", self.pin_controls)
+        self._show_controls()
+        self._refresh_language_text()
+        self._reset_autohide_timer()
+
+    def _show_options(self):
+        """Open the password-protected caregiver options dialog."""
+        self._reset_autohide_timer()
+        password = simpledialog.askstring(
+            FR["options_password_title"],
+            FR["options_password_prompt"],
+            parent=self.root,
+            show="*",
+        )
+        if password is None:
+            return
+        if password != self.options_password:
+            messagebox.showerror(FR["error"], FR["options_password_bad"], parent=self.root)
+            return
+        self._open_options_dialog()
+
+    def _open_options_dialog(self):
+        """Render caregiver settings after successful password entry."""
+        dlg = tk.Toplevel(self.root)
+        dlg.title(FR["options_title"])
+        dlg.geometry("620x360")
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        dlg.grab_set()
+        dlg.configure(bg="#1a1a1a")
+
+        body = tk.Frame(dlg, bg="#1a1a1a")
+        body.pack(fill=tk.BOTH, expand=True, padx=25, pady=20)
+
+        tk.Label(
+            body, text=FR["app_title_label"], font=("TkDefaultFont", 14),
+            fg="white", bg="#1a1a1a", anchor="w",
+        ).pack(fill=tk.X, pady=(0, 5))
+
+        title_var = tk.StringVar(value=self.app_title)
+        title_entry = tk.Entry(body, textvariable=title_var, font=("TkDefaultFont", 16))
+        title_entry.pack(fill=tk.X, pady=(0, 18))
+        title_entry.focus_set()
+
+        keyword_var = tk.BooleanVar(value=self.allow_keyword_changes)
+        tk.Checkbutton(
+            body, text=FR["allow_keyword_changes"], variable=keyword_var,
+            font=("TkDefaultFont", 13), bg="#1a1a1a", fg="white",
+            selectcolor="#333", activebackground="#1a1a1a",
+            activeforeground="white",
+        ).pack(fill=tk.X, anchor="w", pady=(0, 20))
+
+        button_frame = tk.Frame(body, bg="#1a1a1a")
+        button_frame.pack(fill=tk.X, side=tk.BOTTOM)
+
+        tk.Button(
+            button_frame, text=FR["exit"], font=("TkDefaultFont", 14, "bold"),
+            command=lambda: self._confirm_exit(dlg), bg="#cc0000", fg="white",
+            relief=tk.RAISED, padx=20, pady=5,
+        ).pack(side=tk.LEFT)
+
+        tk.Button(
+            button_frame, text=FR["cancel"], font=("TkDefaultFont", 14),
+            command=dlg.destroy, bg="#444", fg="white",
+            relief=tk.RAISED, padx=20, pady=5,
+        ).pack(side=tk.RIGHT, padx=(10, 0))
+
+        tk.Button(
+            button_frame, text=FR["save"], font=("TkDefaultFont", 14),
+            command=lambda: self._save_options(dlg, title_var, keyword_var),
+            bg="#2a6b2a", fg="white", relief=tk.RAISED, padx=20, pady=5,
+        ).pack(side=tk.RIGHT)
+
+        self.root.wait_window(dlg)
+
+    def _save_options(self, dlg, title_var, keyword_var):
+        """Persist caregiver options and refresh visible controls."""
+        title = title_var.get().strip() or FR["title"]
+        self.app_title = title
+        self._custom_app_title = True
+        self.allow_keyword_changes = bool(keyword_var.get())
+        self._save_config_values({
+            "app_title": self.app_title,
+            "allow_keyword_changes": self.allow_keyword_changes,
+        })
+        self._refresh_language_text()
+        self._rebuild_keyword_buttons()
+        dlg.destroy()
 
     # ── Help and exit ───────────────────────────────────────────
 
@@ -1655,7 +2045,7 @@ class SimpleVideoPlayer:
         text_widget.pack(fill=tk.BOTH, expand=True)
 
         close_btn = tk.Button(
-            dlg, text="Fermer", font=("TkDefaultFont", 14),
+            dlg, text=FR["close"], font=("TkDefaultFont", 14),
             command=dlg.destroy, bg="#444", fg="white",
             relief=tk.RAISED, padx=20, pady=5,
         )
@@ -1766,7 +2156,7 @@ class SimpleVideoPlayer:
         ).pack(side=tk.LEFT, padx=(0, 10))
         tk.Button(
             button_frame,
-            text="Fermer" if FR is STRINGS_FR else "Close",
+            text=FR["close"],
             font=("TkDefaultFont", 13),
             command=_close,
             bg="#666",
@@ -1779,10 +2169,10 @@ class SimpleVideoPlayer:
         log("Debug console opened")
         _refresh()
 
-    def _confirm_exit(self):
+    def _confirm_exit(self, parent=None):
         result = messagebox.askyesno(
             FR["confirm_exit_title"], FR["confirm_exit_msg"],
-            parent=self.root, icon="warning",
+            parent=parent or self.root, icon="warning",
             default="no",
         )
         if result:
@@ -1791,6 +2181,12 @@ class SimpleVideoPlayer:
 
     def _cleanup(self):
         self._session_id += 1
+        if self._autohide_after_id is not None:
+            try:
+                self.root.after_cancel(self._autohide_after_id)
+            except tk.TclError:
+                pass
+            self._autohide_after_id = None
         self._terminate_mpv()
         try:
             os.unlink(MPV_SOCKET)
@@ -1847,6 +2243,79 @@ class SimpleVideoPlayer:
         except Exception as e:
             log(f"Failed to save state: {e}")
 
+    def _load_config_str(self, name, default=""):
+        """Read a persisted string config value with a safe default."""
+        data = _load_config()
+        value = data.get(name, default)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return default
+
+    def _load_config_bool(self, name, default=False):
+        """Read a persisted boolean config value with a safe default."""
+        data = _load_config()
+        value = data.get(name, default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return bool(value)
+
+    def _save_config_value(self, name, value):
+        """Merge and persist one user config value without dropping existing keys."""
+        self._save_config_values({name: value})
+
+    def _save_config_values(self, values):
+        """Merge and persist multiple user config values."""
+        global _cfg
+        try:
+            os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
+            os.chmod(CONFIG_DIR, 0o700)
+            data = _load_config()
+            data.update(values)
+            _cfg = data
+            with open(CONFIG_FILE, "w") as f:
+                json.dump(data, f, indent=2)
+            os.chmod(CONFIG_FILE, 0o600)
+            log(f"Config saved: {', '.join(values.keys())}")
+        except Exception as e:
+            log(f"Failed to save config: {e}")
+
+    def _load_favorites(self):
+        """Load the persisted favorites playlist."""
+        try:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            if os.path.exists(FAVORITES_FILE):
+                with open(FAVORITES_FILE) as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    result = []
+                    for item in data:
+                        if not isinstance(item, dict) or not item.get("id"):
+                            continue
+                        result.append({
+                            "id": str(item.get("id")),
+                            "title": str(item.get("title") or item.get("id")),
+                            "duration": int(item.get("duration") or 0),
+                            "added": str(item.get("added") or ""),
+                        })
+                    return result
+        except Exception as e:
+            log(f"Failed to load favorites: {e}")
+        return []
+
+    def _save_favorites(self):
+        """Persist the current favorites playlist."""
+        try:
+            os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
+            os.chmod(CONFIG_DIR, 0o700)
+            with open(FAVORITES_FILE, "w") as f:
+                json.dump(self.favorites, f, indent=2)
+            os.chmod(FAVORITES_FILE, 0o600)
+            log("Favorites saved")
+        except Exception as e:
+            log(f"Failed to save favorites: {e}")
+
     # ── UI polling ──────────────────────────────────────────────
 
     def _poll_mpv(self):
@@ -1889,6 +2358,17 @@ class SimpleVideoPlayer:
                     )
                 pos = self.mpv.get_playlist_pos()
                 count = self.mpv.get_playlist_count()
+                if pos is not None and pos != self._last_playlist_pos:
+                    try:
+                        idx = int(pos)
+                    except (TypeError, ValueError):
+                        idx = -1
+                    if 0 <= idx < len(self.current_playlist):
+                        self.current_video = self.current_playlist[idx]
+                    self._last_playlist_pos = pos
+                    self.favorites = self._load_favorites()
+                    self._refresh_control_states()
+                    self._update_audio_label()
                 if (
                     pos is not None
                     and count is not None
@@ -1947,6 +2427,10 @@ class SimpleVideoPlayer:
         self._set_controls_enabled(False)
         self.play_btn.config(text=FR["control_play"])
         self._paused = False
+        self.current_playlist = []
+        self.current_video = None
+        self._last_playlist_pos = None
+        self._refresh_control_states()
         self._show_keyword_view()
         messagebox.showerror(FR["error"], msg, parent=self.root)
 

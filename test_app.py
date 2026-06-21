@@ -82,6 +82,7 @@ def test_mpv_command_format():
         "--profile=fast",
         "--x11-bypass-compositor=yes",
         "--ytdl-format=bv[height<=720]+ba/b[height<=720]",
+        "--alang=fr,en",
         "--script-opts=ytdl_hook-ytdl_path=/venv/bin/yt-dlp",
     ]
     test("mpv command has all required args",
@@ -113,9 +114,24 @@ def test_mpv_command_format():
          all(a in fallback_cmd for a in ("--fs", "--ontop", "--no-border")),
          f"cmd={fallback_cmd}")
     test("standalone mpv fallback omits X11-only flags",
-         "--gpu-context=x11egl" not in fallback_cmd and
-         "--x11-bypass-compositor=yes" not in fallback_cmd,
-         f"cmd={fallback_cmd}")
+          "--gpu-context=x11egl" not in fallback_cmd and
+          "--x11-bypass-compositor=yes" not in fallback_cmd,
+          f"cmd={fallback_cmd}")
+
+    cc_cmd = mod._build_mpv_command(
+        urls,
+        display_mode="standalone",
+        socket_path="<runtime>/mpv-socket",
+        audio_backend="pulse",
+        ytdlp_path="/venv/bin/yt-dlp",
+        language="en",
+        subtitles_enabled=True,
+    )
+    test("mpv command enables subtitles when CC is on",
+         "--sub-auto=best" in cc_cmd and "--slang=en,fr" in cc_cmd,
+         f"cmd={cc_cmd}")
+    test("mpv command uses requested audio language order",
+         "--alang=en,fr" in cc_cmd, f"cmd={cc_cmd}")
 
 
 def test_display_mode_detection():
@@ -193,10 +209,15 @@ def test_french_strings():
     mod = _import_module()
     required_keys = [
         "title", "add_keyword", "exit", "edit",
+        "options", "options_title", "options_password_title",
+        "options_password_prompt", "options_password_bad", "app_title_label",
+        "allow_keyword_changes", "save",
         "control_play", "control_pause", "control_next", "control_prev",
         "control_stop", "control_keywords", "volume", "now_playing",
         "error", "portal_detected", "help", "help_title", "help_text",
-        "confirm_exit_title", "confirm_exit_msg",
+        "confirm_exit_title", "confirm_exit_msg", "language_toggle",
+        "pin", "unpin", "cc", "audio_fr", "audio_en", "favorite",
+        "favorites", "no_favorites", "close",
     ]
     missing = [k for k in required_keys if k not in mod.FR or not mod.FR[k]]
     test("All French UI strings defined", not missing,
@@ -226,7 +247,11 @@ def test_mpv_remote_playlist_methods():
     test("MpvRemote has get_playlist_pos",
          hasattr(mod.MpvRemote, "get_playlist_pos"))
     test("MpvRemote has get_playlist_count",
-         hasattr(mod.MpvRemote, "get_playlist_count"))
+          hasattr(mod.MpvRemote, "get_playlist_count"))
+    test("MpvRemote has cycle_audio",
+          hasattr(mod.MpvRemote, "cycle_audio"))
+    test("MpvRemote has get_current_audio_track",
+          hasattr(mod.MpvRemote, "get_current_audio_track"))
 
 
 def test_audio_backend_detection():
@@ -371,8 +396,14 @@ def test_search_constants():
 def test_config_file_location():
     mod = _import_module()
     test("KEYWORDS_FILE ends with keywords.json",
-         mod.KEYWORDS_FILE.endswith("keywords.json"),
-         f"got {mod.KEYWORDS_FILE}")
+          mod.KEYWORDS_FILE.endswith("keywords.json"),
+          f"got {mod.KEYWORDS_FILE}")
+    test("CONFIG_FILE ends with config.json",
+          mod.CONFIG_FILE.endswith("config.json"),
+          f"got {mod.CONFIG_FILE}")
+    test("FAVORITES_FILE ends with favorites.json",
+          mod.FAVORITES_FILE.endswith("favorites.json"),
+          f"got {mod.FAVORITES_FILE}")
 
 
 def test_load_config_missing_defaults():
@@ -385,8 +416,28 @@ def test_load_config_missing_defaults():
             test("_load_config returns empty dict when missing",
                  cfg == {}, f"got {cfg}")
             test("Missing config uses default constants",
-                 (mod.SEARCH_COUNT, mod.PLAYLIST_SIZE, mod.MIN_DURATION) == (30, 20, 300),
-                 f"got {(mod.SEARCH_COUNT, mod.PLAYLIST_SIZE, mod.MIN_DURATION)}")
+                  (mod.SEARCH_COUNT, mod.PLAYLIST_SIZE, mod.MIN_DURATION) == (30, 20, 300),
+                  f"got {(mod.SEARCH_COUNT, mod.PLAYLIST_SIZE, mod.MIN_DURATION)}")
+            test("Missing config defaults language to French",
+                  mod._cfg_language() == "fr", f"got {mod._cfg_language()}")
+        finally:
+            if old_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = old_home
+
+
+def test_options_defaults():
+    old_home = os.environ.get("HOME")
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            os.environ["HOME"] = tmp
+            mod = _import_module("svp_options_missing")
+            app = object.__new__(mod.SimpleVideoPlayer)
+            test("Missing config defaults keyword changes on",
+                  app._load_config_bool("allow_keyword_changes", True) is True)
+            test("Missing config defaults options password",
+                  app._load_config_str("options_password", "baloney") == "baloney")
         finally:
             if old_home is None:
                 os.environ.pop("HOME", None)
@@ -507,6 +558,7 @@ if __name__ == "__main__":
     test_search_constants()
     test_config_file_location()
     test_load_config_missing_defaults()
+    test_options_defaults()
     test_persistent_keywords()
     test_load_state_missing_defaults()
     test_kiosk_constants()

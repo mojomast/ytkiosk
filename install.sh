@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SOURCE_URL="${YTKIOSK_SOURCE_URL:-https://github.com/mojomast/ytkiosk/archive/refs/heads/main.tar.gz}"
-INSTALL_VERSION="2026-06-21.3"
+INSTALL_VERSION="2026-06-21.5"
 APP_DIR="${YTKIOSK_APP_DIR:-$HOME/.local/share/ytkiosk}"
 BIN_DIR="$HOME/.local/bin"
 

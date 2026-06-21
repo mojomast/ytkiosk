@@ -1,5 +1,11 @@
 {
   "search_count": 30,
   "playlist_size": 20,
-  "min_duration": 300
+  "min_duration": 300,
+  "language": "fr",
+  "cc_enabled": false,
+  "pin_controls": false,
+  "app_title": "Lecteur Vidéo Simple",
+  "allow_keyword_changes": true,
+  "options_password": "baloney"
 }
