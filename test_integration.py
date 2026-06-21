@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tkinter as tk
 import importlib.util
 import time
+import tempfile
 
 APP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "simple-video-player.py")
 
@@ -34,6 +35,7 @@ def find_keyword_buttons(widget):
             if text and text not in (
                 mod.FR["add_keyword"], mod.FR["edit"], mod.FR["exit"],
                 mod.FR["help"], mod.FR["debug"], mod.FR["options"],
+                "×",
             ) and text not in (
                 mod.FR["control_play"], mod.FR["control_pause"],
                 mod.FR["control_next"], mod.FR["control_prev"],
@@ -133,15 +135,23 @@ def test_edit_button_bound():
     root.update_idletasks()
 
     edits = []
+    deletes = []
     for child in app.kw_scrollable.winfo_children():
         if isinstance(child, tk.Frame):
             for c in child.winfo_children():
                 if isinstance(c, tk.Button) and c.cget("text") == mod.FR["edit"]:
                     edits.append(c)
+                if isinstance(c, tk.Button) and c.cget("text") == "×":
+                    deletes.append(c)
 
     print(f"Edit buttons found: {len(edits)} (expected 4)")
+    print(f"Delete buttons found: {len(deletes)} (expected 4)")
     if len(edits) < 4:
         print("ERROR: Not all keywords have edit buttons!")
+        root.destroy()
+        return False
+    if len(deletes) < 4:
+        print("ERROR: Not all keywords have delete buttons!")
         root.destroy()
         return False
 
@@ -201,26 +211,43 @@ def test_help_button():
     return help_btn is not None
 
 
-def test_debug_button():
-    root = tk.Tk()
-    root.withdraw()
-    app = SimpleVideoPlayer(root)
-    root.update_idletasks()
+def test_debug_button_hidden_by_default():
+    old_home = os.environ.get("HOME")
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            os.environ["HOME"] = tmp
+            sys.modules.pop("ytkiosk.legacy", None)
+            pkg = sys.modules.get("ytkiosk")
+            if pkg is not None and hasattr(pkg, "legacy"):
+                delattr(pkg, "legacy")
+            spec2 = importlib.util.spec_from_file_location("svp_debug_default", APP_PATH)
+            mod2 = importlib.util.module_from_spec(spec2)
+            spec2.loader.exec_module(mod2)
+            root = tk.Tk()
+            root.withdraw()
+            app = mod2.SimpleVideoPlayer(root)
+            root.update_idletasks()
 
-    debug_btn = None
-    for child in app.top_bar.winfo_children():
-        if isinstance(child, tk.Button) and child.cget("text") == mod.FR["debug"]:
-            debug_btn = child
-            break
+            debug_btn = None
+            for child in app.top_bar.winfo_children():
+                if isinstance(child, tk.Button) and child.cget("text") == mod2.FR["debug"]:
+                    debug_btn = child
+                    break
 
-    if debug_btn:
-        print("Debug button found in top bar (good)")
-    else:
-        print("ERROR: Debug button not found!")
+            hidden = debug_btn is None or not debug_btn.winfo_ismapped()
+            if hidden:
+                print("Debug button hidden by default (good)")
+            else:
+                print("ERROR: Debug button should be hidden by default!")
 
-    app._cleanup()
-    root.destroy()
-    return debug_btn is not None
+            app._cleanup()
+            root.destroy()
+            return hidden
+        finally:
+            if old_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = old_home
 
 
 def test_options_button():
@@ -268,7 +295,7 @@ if __name__ == "__main__":
     print("\n--- Test 6: Options button present ---")
     test_options_button()
 
-    print("\n--- Test 7: Debug button present ---")
-    test_debug_button()
+    print("\n--- Test 7: Debug button hidden by default ---")
+    test_debug_button_hidden_by_default()
 
     print("\n=== Integration tests complete ===")

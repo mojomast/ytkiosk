@@ -118,22 +118,6 @@ def test_mpv_command_format():
           "--x11-bypass-compositor=yes" not in fallback_cmd,
           f"cmd={fallback_cmd}")
 
-    cc_cmd = mod._build_mpv_command(
-        urls,
-        display_mode="standalone",
-        socket_path="<runtime>/mpv-socket",
-        audio_backend="pulse",
-        ytdlp_path="/venv/bin/yt-dlp",
-        language="en",
-        subtitles_enabled=True,
-    )
-    test("mpv command enables subtitles when CC is on",
-         "--sub-auto=best" in cc_cmd and "--slang=en,fr" in cc_cmd,
-         f"cmd={cc_cmd}")
-    test("mpv command uses requested audio language order",
-         "--alang=en,fr" in cc_cmd, f"cmd={cc_cmd}")
-
-
 def test_display_mode_detection():
     mod = _import_module()
     x11 = mod._detect_mpv_display_mode(
@@ -216,8 +200,9 @@ def test_french_strings():
         "control_stop", "control_keywords", "volume", "now_playing",
         "error", "portal_detected", "help", "help_title", "help_text",
         "confirm_exit_title", "confirm_exit_msg", "language_toggle",
-        "pin", "unpin", "cc", "audio_fr", "audio_en", "favorite",
+        "enable_debug", "favorite",
         "favorites", "no_favorites", "close",
+        "delete_keyword", "delete_keyword_title", "delete_keyword_msg",
     ]
     missing = [k for k in required_keys if k not in mod.FR or not mod.FR[k]]
     test("All French UI strings defined", not missing,
@@ -248,10 +233,6 @@ def test_mpv_remote_playlist_methods():
          hasattr(mod.MpvRemote, "get_playlist_pos"))
     test("MpvRemote has get_playlist_count",
           hasattr(mod.MpvRemote, "get_playlist_count"))
-    test("MpvRemote has cycle_audio",
-          hasattr(mod.MpvRemote, "cycle_audio"))
-    test("MpvRemote has get_current_audio_track",
-          hasattr(mod.MpvRemote, "get_current_audio_track"))
 
 
 def test_audio_backend_detection():
@@ -438,6 +419,8 @@ def test_options_defaults():
                   app._load_config_bool("allow_keyword_changes", True) is True)
             test("Missing config defaults options password",
                   app._load_config_str("options_password", "baloney") == "baloney")
+            test("Missing config hides Debug by default",
+                  app._load_config_bool("enable_debug", False) is False)
         finally:
             if old_home is None:
                 os.environ.pop("HOME", None)

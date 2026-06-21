@@ -9,11 +9,11 @@ Hospital-grade kiosk YouTube player for Linux Mint. Designed for elderly patient
 - Click a keyword → searches YouTube → fetches **30 videos** → filters long (≥5 min) → picks **20 random long ones** → auto-plays in shuffled order
 - On-screen controls: pause/next/prev/volume/stop/return-to-keywords
 - **Persistent keywords** saved to `~/.config/yt-player/keywords.json`
-- **Persistent language/CC/pin preferences** saved to `~/.config/yt-player/config.json`
+- **Persistent language/options preferences** saved to `~/.config/yt-player/config.json`
 - **Favorites playlist** saved to `~/.config/yt-player/favorites.json`
-- Runtime EN/FR UI toggle, CC toggle, audio-track cycling, auto-hide playback bars, and password-protected Options menu
-- Configurable application title plus caregiver control over keyword add/edit visibility
-- Help dialog and Debug console for caregivers/testers
+- Runtime EN/FR UI toggle, password-protected Options menu, and favorites
+- Configurable application title plus caregiver control over keyword add/edit/delete visibility
+- Help dialog and optional Debug console for caregivers/testers
 - Exit with confirmation dialog
 - Captive portal detection & auto-accept tuned for the CISSS Côte-Nord guest WiFi portal
 - App tests cover mpv command construction, display fallback, captive portal form parsing/submission, and config defaults; integration smoke tests cover Tk UI wiring
@@ -91,7 +91,7 @@ See `docs/DEPENDENCIES.md`, `docs/RELEASE.md`, and
 The README one-line install is the primary deployment path:
 
 ```bash
-curl -fsSL 'https://raw.githubusercontent.com/mojomast/ytkiosk/main/install.sh?v=2026-06-21.5' | bash
+curl -fsSL 'https://raw.githubusercontent.com/mojomast/ytkiosk/main/install.sh?v=2026-06-21.7' | bash
 ```
 
 It downloads `install.sh` from `main`; the installer downloads
@@ -148,7 +148,7 @@ User clicks keyword (e.g. "Voitures classiques")
   │         [20 shuffled YouTube URLs...]
   │
   └─► Controls enabled (IPC socket)
-        ⏮  ▶/⏸  ⏭  CC  Audio  ♥  |  Volume [===]  |  Arrêter  Mots-clés
+        ⏮  ▶/⏸  ⏭  ♥  |  Volume [===]  |  Arrêter  Mots-clés
 ```
 
 ### New: Search & Playlist Algorithm
@@ -161,7 +161,7 @@ User clicks keyword (e.g. "Voitures classiques")
 ### New: Embedded mpv (tkinter + X11/XWayland)
 ```
 Main Window (fullscreen)
-  ├── Top Bar: [Aide] [Debug] [EN/FR] [Épingler/Pin] [⚙ Options]
+  ├── Top Bar: [Aide] [EN/FR] [⚙ Options]  (Debug appears only when enabled)
   ├── Main Area (fill both)
   │     ├── [Keyword View]  ← visible when choosing
   │     ├── [Loading Label] ← visible during search
@@ -213,16 +213,15 @@ Important implementation details in `src/ytkiosk/legacy.py`:
 - After portal acceptance, `_wait_after_captive_portal()` waits for connectivity to settle, then `_fetch_playlist_with_retries()` retries the initial search. Defaults: `POST_PORTAL_SEARCH_RETRIES=3`, `POST_PORTAL_RETRY_DELAY=5`.
 
 Debugging:
-- The top-bar **Debug** button opens a live tail of `LOG_FILE`.
+- The top-bar **Debug** button is hidden by default; enable it in Options to open a live tail of `LOG_FILE`.
 - Logs redact query strings in URLs as `<query>`.
 - Captive portal logs include fetch status/final URL/content type, selected form action/post URL, field names/types, submitted field names, submit status/final URL, and retry outcomes.
 
 Config overrides in `~/.config/yt-player/config.json`:
 - `language`: `"fr"` or `"en"`; defaults to `"fr"`.
-- `cc_enabled`: boolean for subtitles/closed captions; defaults to `false`.
-- `pin_controls`: boolean to disable playback control auto-hide; defaults to `false`.
 - `app_title`: custom title shown in the window/title heading; defaults to the active localized title.
-- `allow_keyword_changes`: boolean to show/hide add/edit keyword controls; defaults to `true`.
+- `allow_keyword_changes`: boolean to show/hide add/edit/delete keyword controls; defaults to `true`.
+- `enable_debug`: boolean to show/hide the Debug button; defaults to `false`.
 - `options_password`: password for the caregiver Options menu; defaults to `"baloney"`.
 - `captive_portal_urls`: string comma list or JSON list of portal URLs.
 - `enable_captive_portal_trigger_urls`: boolean to re-enable generic trigger URLs.
@@ -282,11 +281,9 @@ mpv now renders inside the tkinter window via X11/XWayland embedding. Native Way
 1. **X11-oriented embedding** — mpv uses Tk's X11 window ID via `--wid`; native Wayland embedding is unsupported and falls back to standalone fullscreen mpv.
 2. **Captive portal auto-accept is deployment-tuned** — currently optimized for CISSS Côte-Nord. Other portals may need config changes or new parser rules.
 3. **Daemon worker threads** — stale playback startup callbacks are session-guarded, but workers are still daemon threads during app shutdown.
-4. **Audio track cycling depends on source media** — the Audio button only changes language when a video exposes multiple audio tracks to mpv.
-5. **Subtitle availability varies** — CC asks mpv for best subtitles and prefers `fr,en` or `en,fr`, but YouTube videos may not expose matching captions.
-6. **Options password is a kiosk guardrail** — it is stored in plain text in `config.json`, not hashed or encrypted.
-7. **Duration filter may be too aggressive** — `MIN_DURATION=300` (5 min) might filter out good content for some keywords. Adjust config if needed.
-8. **yt-dlp rate limiting** — YouTube may throttle after repeated requests. Add `--sleep-requests 1` if issues arise.
+4. **Options password is a kiosk guardrail** — it is stored in plain text in `config.json`, not hashed or encrypted.
+5. **Duration filter may be too aggressive** — `MIN_DURATION=300` (5 min) might filter out good content for some keywords. Adjust config if needed.
+6. **yt-dlp rate limiting** — YouTube may throttle after repeated requests. Add `--sleep-requests 1` if issues arise.
 
 ## Running Tests
 ```bash
