@@ -724,6 +724,11 @@ def _portal_redirect_from_query(final_url, portal_url=None):
     return ""
 
 
+def _is_cisco_portal_form(form):
+    names = {field.get("name", "") for field in form.get("fields", [])}
+    return "buttonClicked" in names and "redirect_url" in names
+
+
 def _portal_form_data(form, final_url, portal_url=None):
     data = {}
     selected_submit = form.get("accept_submit")
@@ -786,7 +791,14 @@ def try_auto_accept(portal_url, base_url=None):
         )
         return False
 
-    action = _portal_action_from_query(final_url, portal_url) or form.get("action") or final_url
+    query_action = _portal_action_from_query(final_url, portal_url)
+    if _is_cisco_portal_form(form) and not query_action:
+        log(
+            "Captive portal auto-accept: Cisco-style form has no switch_url; "
+            "not submitting placeholder action. Need redirected portal URL with switch_url."
+        )
+        return False
+    action = query_action or form.get("action") or final_url
 
     post_url = _portal_submit_url(final_url, action, base_url)
     if urlparse(post_url).scheme not in ("http", "https"):
@@ -839,9 +851,9 @@ def try_auto_accept(portal_url, base_url=None):
 
 def captive_portal_attempt_urls(portal_url=None, include_triggers=False):
     urls = []
-    urls.extend(CAPTIVE_PORTAL_URLS)
     if portal_url:
         urls.append(portal_url)
+    urls.extend(CAPTIVE_PORTAL_URLS)
     if ENABLE_CAPTIVE_PORTAL_TRIGGER_URLS and include_triggers:
         urls.extend(CAPTIVE_PORTAL_TRIGGER_URLS)
 

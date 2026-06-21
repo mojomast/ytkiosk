@@ -313,6 +313,23 @@ def test_cisco_captive_portal_javascript_defaults():
          "Submit" not in data, f"data={data}")
 
 
+def test_cisco_captive_portal_requires_switch_url():
+    mod = _import_module()
+    parser = mod.PortalFormParser()
+    parser.feed(
+        '<form method="post" action="https://www.google.ca">'
+        '<input name="buttonClicked" value="0" type="hidden">'
+        '<input name="redirect_url" value="" type="hidden">'
+        '<input type="button" name="Submit" value="Accepter" onclick="submitAction();">'
+        '</form>'
+    )
+    form = mod._select_portal_form(parser)
+    test("Cisco portal form is detected",
+         mod._is_cisco_portal_form(form), f"form={form}")
+    test("Cisco portal without switch_url has no query action",
+         mod._portal_action_from_query("https://cisss-public.reg09.rtss.qc.ca/login.html") is None)
+
+
 def test_hospital_portal_attempts_before_generic_triggers():
     mod = _import_module()
     urls = mod.captive_portal_attempt_urls()
@@ -322,6 +339,11 @@ def test_hospital_portal_attempts_before_generic_triggers():
     test("Generic captive portal triggers are disabled by default",
          "http://1.1.1.1/" not in urls and "http://neverssl.com/" not in urls,
          f"urls={urls}")
+
+    detected_url = "https://cisss-public.reg09.rtss.qc.ca/login.html?switch_url=http%3A%2F%2F1.2.3.4%2Flogin.html"
+    detected_urls = mod.captive_portal_attempt_urls(detected_url)
+    test("Detected portal URL is attempted before static fallback",
+         detected_urls[0] == detected_url, f"urls={detected_urls}")
 
 
 def test_search_constants():
@@ -468,6 +490,7 @@ if __name__ == "__main__":
     test_captive_portal_form_selection()
     test_captive_portal_submit_url_uses_final_url()
     test_cisco_captive_portal_javascript_defaults()
+    test_cisco_captive_portal_requires_switch_url()
     test_hospital_portal_attempts_before_generic_triggers()
 
     print("\n--- Configuration ---")
