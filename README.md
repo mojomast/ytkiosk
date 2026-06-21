@@ -201,6 +201,8 @@ All UI strings live in the language dictionaries near the top of `src/ytkiosk/le
 | `CONFIG_DIR` | `~/.config/yt-player` | Where keywords and state are saved |
 | `RUNTIME_DIR` | `$XDG_RUNTIME_DIR/yt-player-$UID` or `/tmp/yt-player-$UID` | Private runtime directory for logs and mpv IPC socket |
 
+Captive portal defaults are currently tuned for the CISSS Côte-Nord guest WiFi portal. The app tries `https://cisss-public.reg09.rtss.qc.ca/login.html` directly and does not use generic `1.1.1.1` / `neverssl.com` trigger URLs by default. To change this later, add `captive_portal_urls` or `enable_captive_portal_trigger_urls` to `~/.config/yt-player/config.json`.
+
 `mpv` is intentionally not bundled. Future Linux release bundles may include
 the Python app, Python dependencies, and an optional JavaScript runtime sidecar,
 while continuing to use distro `mpv` for playback.

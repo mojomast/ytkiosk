@@ -408,6 +408,32 @@ CAPTIVE_PORTAL_TRIGGER_URLS = [
     "http://neverssl.com/",
 ]
 
+DEFAULT_CAPTIVE_PORTAL_URLS = [
+    "https://cisss-public.reg09.rtss.qc.ca/login.html",
+]
+
+
+def _cfg_bool(name, default=False):
+    value = _cfg.get(name, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
+def _cfg_str_list(name, default):
+    value = _cfg.get(name)
+    if isinstance(value, str) and value.strip():
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if isinstance(value, list):
+        return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+    return list(default)
+
+
+CAPTIVE_PORTAL_URLS = _cfg_str_list("captive_portal_urls", DEFAULT_CAPTIVE_PORTAL_URLS)
+ENABLE_CAPTIVE_PORTAL_TRIGGER_URLS = _cfg_bool("enable_captive_portal_trigger_urls", False)
+
 ACCEPT_WORDS = (
     "accept",
     "agree",
@@ -493,31 +519,34 @@ def detect_captive_portal():
                         abs_url = urljoin(url, portal_url)
                         return True, abs_url, url
                 if e.code in (401, 403, 511):
-                    return True, CAPTIVE_PORTAL_TRIGGER_URLS[0], url
+                    fallback_url = CAPTIVE_PORTAL_URLS[0] if CAPTIVE_PORTAL_URLS else None
+                    return True, fallback_url, url
                 return False, None, url
             finally:
                 e.close()
         except (urllib.error.URLError, OSError, ValueError):
             last_failed_url = url
 
-    # Many captive portals only reveal themselves when a plain HTTP IP is opened.
-    for url in CAPTIVE_PORTAL_TRIGGER_URLS:
-        req = urllib.request.Request(url, method="GET")
-        req.add_header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64)")
-        try:
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                if resp.url != url or resp.status in (200, 30, 301, 302, 303, 307, 308):
-                    return True, resp.url or url, url
-        except urllib.error.HTTPError as e:
+    if ENABLE_CAPTIVE_PORTAL_TRIGGER_URLS:
+        # Generic triggers are opt-in; this deployment targets a known hospital portal.
+        for url in CAPTIVE_PORTAL_TRIGGER_URLS:
+            req = urllib.request.Request(url, method="GET")
+            req.add_header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64)")
             try:
-                portal_url = e.headers.get("Location")
-                return True, urljoin(url, portal_url) if portal_url else url, url
-            finally:
-                e.close()
-        except (urllib.error.URLError, OSError, ValueError):
-            continue
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    if resp.url != url:
+                        return True, resp.url or url, url
+            except urllib.error.HTTPError as e:
+                try:
+                    portal_url = e.headers.get("Location")
+                    return True, urljoin(url, portal_url) if portal_url else url, url
+                finally:
+                    e.close()
+            except (urllib.error.URLError, OSError, ValueError):
+                continue
     if last_failed_url:
-        return True, CAPTIVE_PORTAL_TRIGGER_URLS[0], last_failed_url
+        fallback_url = CAPTIVE_PORTAL_URLS[0] if CAPTIVE_PORTAL_URLS else None
+        return True, fallback_url, last_failed_url
     return False, None, None
 
 
@@ -766,9 +795,10 @@ def try_auto_accept(portal_url, base_url=None):
 
 def captive_portal_attempt_urls(portal_url=None, include_triggers=False):
     urls = []
+    urls.extend(CAPTIVE_PORTAL_URLS)
     if portal_url:
         urls.append(portal_url)
-    if include_triggers or not portal_url:
+    if ENABLE_CAPTIVE_PORTAL_TRIGGER_URLS and include_triggers:
         urls.extend(CAPTIVE_PORTAL_TRIGGER_URLS)
 
     seen = set()
@@ -870,7 +900,7 @@ def handle_captive_portal(root, on_done):
                     if detected_url:
                         candidate_url = detected_url
                         current_portal_url[0] = detected_url
-                include_triggers = candidate_url is None or attempt_count[0] > 2
+                include_triggers = attempt_count[0] > 2
                 accepted, accepted_url = try_auto_accept_any(
                     candidate_url,
                     include_triggers=include_triggers,
@@ -891,7 +921,7 @@ def handle_captive_portal(root, on_done):
             threading.Thread(target=_worker, daemon=True).start()
 
         def _manual_open():
-            open_url = current_portal_url[0] or CAPTIVE_PORTAL_TRIGGER_URLS[0]
+            open_url = current_portal_url[0] or (CAPTIVE_PORTAL_URLS[0] if CAPTIVE_PORTAL_URLS else None)
             _set_status(
                 "Ouverture manuelle de la page du portail :\n"
                 f"{open_url}\n\n"
@@ -900,7 +930,10 @@ def handle_captive_portal(root, on_done):
             _open_browser(open_url)
 
         def _open_browser(url):
-            open_url = url or current_portal_url[0] or CAPTIVE_PORTAL_TRIGGER_URLS[0]
+            open_url = url or current_portal_url[0] or (CAPTIVE_PORTAL_URLS[0] if CAPTIVE_PORTAL_URLS else None)
+            if not open_url:
+                _set_status("Aucune URL de portail configurée.")
+                return
             if urlparse(open_url).scheme not in ("http", "https"):
                 _set_status(f"URL de portail invalide :\n{open_url}")
                 return

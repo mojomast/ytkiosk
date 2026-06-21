@@ -313,6 +313,17 @@ def test_cisco_captive_portal_javascript_defaults():
          "Submit" not in data, f"data={data}")
 
 
+def test_hospital_portal_attempts_before_generic_triggers():
+    mod = _import_module()
+    urls = mod.captive_portal_attempt_urls()
+    test("CISSS captive portal is attempted by default",
+         urls and urls[0] == "https://cisss-public.reg09.rtss.qc.ca/login.html",
+         f"urls={urls}")
+    test("Generic captive portal triggers are disabled by default",
+         "http://1.1.1.1/" not in urls and "http://neverssl.com/" not in urls,
+         f"urls={urls}")
+
+
 def test_search_constants():
     mod = _import_module()
     test("SEARCH_COUNT >= 20", mod.SEARCH_COUNT >= 20,
@@ -457,6 +468,7 @@ if __name__ == "__main__":
     test_captive_portal_form_selection()
     test_captive_portal_submit_url_uses_final_url()
     test_cisco_captive_portal_javascript_defaults()
+    test_hospital_portal_attempts_before_generic_triggers()
 
     print("\n--- Configuration ---")
     test_search_constants()
