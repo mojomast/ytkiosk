@@ -12,7 +12,7 @@ Hospital-grade kiosk YouTube player for Linux Mint. Designed for elderly patient
 - Help dialog for caregivers (French)
 - Exit with confirmation dialog
 - Captive portal detection & auto-accept on public WiFi
-- **15 unit tests + 6 integration tests all pass**
+- **34 app tests + 6 integration tests pass**
 
 ## Tech Stack
 
@@ -21,8 +21,8 @@ Hospital-grade kiosk YouTube player for Linux Mint. Designed for elderly patient
 | OS | Linux Mint 22.3 (Zena), XFCE, X11 | — | — |
 | Python | 3.12.3 | apt (python3) | `/usr/bin/python3` |
 | tkinter | 8.6 | apt (python3-tk) | — |
-| mpv | 0.37+ | apt | `/usr/bin/mpv` |
-| yt-dlp | 2026.06.09 | **GitHub release** (NOT apt) | `/usr/local/bin/yt-dlp` |
+| mpv | 0.37+ | apt or configured path | auto-detected with fallback `/usr/bin/mpv` |
+| yt-dlp | 2026.06.09 | **GitHub release** preferred | auto-detected with fallback `/usr/local/bin/yt-dlp` |
 | deno | latest | GitHub install script | `/usr/local/bin/deno` |
 
 ### Critical: yt-dlp must be the latest GitHub release
@@ -41,12 +41,12 @@ sudo install -m 755 "$HOME/.deno/bin/deno" /usr/local/bin/deno
 ```
 Install Deno into `/usr/local/bin` so subprocesses launched by the app and yt-dlp can find it reliably.
 
-## Files (all in `/home/baloney/yt/`)
+## Files
 
 | File | Purpose |
 |------|---------|
-| `simple-video-player.py` | Main app (~770 lines) |
-| `test_app.py` | 15 unit tests |
+| `simple-video-player.py` | Main app |
+| `test_app.py` | App/unit-style tests |
 | `test_integration.py` | 6 integration tests |
 | `yt-player.desktop` | Desktop shortcut |
 | `HANDOFF.md` | This file |
@@ -79,11 +79,11 @@ User clicks keyword (e.g. "Voitures classiques")
   │     mpv --osd-level=0
   │         --wid={X11_ID}
   │         --no-config
-  │         --input-ipc-server=/tmp/mpv-socket
-  │         --keep-open=always
+  │         --input-ipc-server=$RUNTIME_DIR/mpv-socket
+  │         --keep-open=no
   │         --gpu-context=x11egl
-  │         --ao=pulse --profile=fast --gpu-dumb-mode=yes
-  │         --x11-bypass-compositor=no
+  │         --ao=<detected backend> --profile=fast
+  │         --x11-bypass-compositor=yes
   │         --ytdl-format="bv[height<=720]+ba/b[height<=720]"
   │         [20 shuffled YouTube URLs...]
   │
@@ -126,8 +126,8 @@ Main Window (fullscreen)
 - Loaded on startup; initialized to `INITIAL_KEYWORDS` if missing
 - Saved on every add/edit
 
-### IPC Control (MpvRemote class — unchanged)
-All controls communicate with mpv via Unix socket at `/tmp/mpv-socket`:
+### IPC Control (MpvRemote class)
+All controls communicate with mpv via a Unix socket in the private per-user runtime directory:
 - `toggle_pause()` → `cycle pause`
 - `next_track()` → `playlist-next`
 - `prev_track()` → `playlist-prev`
@@ -178,28 +178,26 @@ mpv now renders inside the tkinter window via X11 embedding.
 
 ## Known Issues / Gotchas
 
-1. **No audio device fallback** — `--ao=pulse` assumes PulseAudio. If system uses ALSA or PipeWire directly, change to `--ao=alsa` or `--ao=pipewire`.
+1. **X11-oriented embedding** — mpv uses Tk's X11 window ID via `--wid`; Wayland or unusual GPU drivers may need mpv flag changes.
 2. **Captive portal auto-accept is best-effort** — works for simple "click agree" portals, not complex login portals.
-3. **Socket path hardcoded** — `/tmp/mpv-socket`. Fine for single-user, would conflict on multi-user system.
-4. **daemon threads** — playback thread is daemon, so if main window closes during playback, thread may not clean up mpv.
-5. **No automatic playlist refresh** — once the 20-video playlist finishes, mpv stays on the last frame. User must click "Mots-clés" and re-select a keyword.
-6. **No screensaver inhibition** — consider adding `xset s off -dpms` for hospital use.
-7. **Duration filter may be too aggressive** — `MIN_DURATION=300` (5 min) might filter out good content for some keywords. Adjust in the code if needed.
-8. **yt-dlp rate limiting** — YouTube may throttle after repeated requests. Add `--sleep-requests 1` if issues arise.
+3. **Daemon worker threads** — stale playback startup callbacks are session-guarded, but workers are still daemon threads during app shutdown.
+4. **Duration filter may be too aggressive** — `MIN_DURATION=300` (5 min) might filter out good content for some keywords. Adjust config if needed.
+5. **yt-dlp rate limiting** — YouTube may throttle after repeated requests. Add `--sleep-requests 1` if issues arise.
 
 ## Running Tests
 ```bash
-python3 /home/baloney/yt/test_app.py        # 15 unit tests
-python3 /home/baloney/yt/test_integration.py # 6 integration tests
+python3 test_app.py
+xvfb-run -a python3 test_integration.py
 ```
+Use `xvfb-run` for integration tests on headless systems because Tk requires a display.
 
 ## Desktop Shortcut
-`/home/baloney/yt/yt-player.desktop` — placed on desktop or in `~/.local/share/applications/`
+`yt-player.desktop` — placed on desktop or in `~/.local/share/applications/`
 
 ## Auto-start on Boot (for hospital use)
 ```bash
 mkdir -p ~/.config/autostart
-cp /home/baloney/yt/yt-player.desktop ~/.config/autostart/
+cp yt-player.desktop ~/.config/autostart/
 ```
 
 ## French Strings

@@ -55,7 +55,7 @@ User clicks keyword
   │     Show video frame → get X11 window ID → mpv --wid={ID}
   │
   └─► mpv plays embedded in the tkinter window
-        Controls via IPC Unix socket (/tmp/mpv-socket)
+        Controls via IPC Unix socket in a private per-user runtime directory
 ```
 
 ---
@@ -139,7 +139,8 @@ All UI strings live in the `FR` dictionary at the top of `simple-video-player.py
 | `SEARCH_COUNT` | 30 | Videos fetched per search |
 | `PLAYLIST_SIZE` | 20 | Videos in the auto-queue |
 | `MIN_DURATION` | 300 | Minimum video length in seconds (5 min) |
-| `CONFIG_DIR` | `~/.config/yt-player` | Where keywords are saved |
+| `CONFIG_DIR` | `~/.config/yt-player` | Where keywords and state are saved |
+| `RUNTIME_DIR` | `$XDG_RUNTIME_DIR/yt-player-$UID` or `/tmp/yt-player-$UID` | Private runtime directory for logs and mpv IPC socket |
 
 ---
 
@@ -175,18 +176,19 @@ All UI strings live in the `FR` dictionary at the top of `simple-video-player.py
 ## Running Tests
 
 ```bash
-python3 test_app.py         # 24 unit tests
-python3 test_integration.py # 6 integration tests
+python3 test_app.py
+xvfb-run -a python3 test_integration.py
 ```
+
+`test_integration.py` creates Tk windows, so it needs a display. Use `xvfb-run` on headless systems.
 
 ---
 
 ## Known Limitations
 
-- Audio backend assumes PulseAudio (`--ao=pulse`). Change to `alsa` or `pipewire` if needed
+- mpv embedding is X11-oriented (`--wid`, `--gpu-context=x11egl`) and may need display/GPU flag changes on Wayland or unusual drivers
 - Captive portal auto-accept works for simple "click agree" portals only
-- When the playlist ends, the user must re-select a keyword to start a new queue
-- Single-user only — socket at `/tmp/mpv-socket` assumes one session
+- Audio backend is detected at playback start; hot-plugged audio devices may require restarting playback
 
 ---
 
