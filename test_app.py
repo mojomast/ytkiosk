@@ -313,8 +313,12 @@ def test_cisco_captive_portal_javascript_defaults():
          "Submit" not in data, f"data={data}")
 
 
-def test_cisco_captive_portal_requires_switch_url():
+def test_cisco_captive_portal_without_switch_url_posts_to_current_url():
     mod = _import_module()
+    portal_url = (
+        "https://cisss-public.reg09.rtss.qc.ca/login.html?"
+        "redirect=http%3A%2F%2Fdetectportal.firefox.com%2Fcanonical.html"
+    )
     parser = mod.PortalFormParser()
     parser.feed(
         '<form method="post" action="https://www.google.ca">'
@@ -326,8 +330,8 @@ def test_cisco_captive_portal_requires_switch_url():
     form = mod._select_portal_form(parser)
     test("Cisco portal form is detected",
          mod._is_cisco_portal_form(form), f"form={form}")
-    test("Cisco portal without switch_url has no query action",
-         mod._portal_action_from_query("https://cisss-public.reg09.rtss.qc.ca/login.html") is None)
+    test("Cisco portal without switch_url posts to current portal URL",
+         mod._portal_form_action(form, portal_url, portal_url) == portal_url)
 
 
 def test_hospital_portal_attempts_before_generic_triggers():
@@ -490,7 +494,7 @@ if __name__ == "__main__":
     test_captive_portal_form_selection()
     test_captive_portal_submit_url_uses_final_url()
     test_cisco_captive_portal_javascript_defaults()
-    test_cisco_captive_portal_requires_switch_url()
+    test_cisco_captive_portal_without_switch_url_posts_to_current_url()
     test_hospital_portal_attempts_before_generic_triggers()
 
     print("\n--- Configuration ---")

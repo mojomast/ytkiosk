@@ -714,6 +714,20 @@ def _portal_action_from_query(final_url, portal_url=None):
     return None
 
 
+def _portal_form_action(form, final_url, portal_url=None):
+    query_action = _portal_action_from_query(final_url, portal_url)
+    if query_action:
+        return query_action
+    action = form.get("action")
+    if _is_cisco_portal_form(form) and action and "google." in urlparse(action).netloc:
+        log(
+            "Captive portal auto-accept: Cisco-style form has no switch_url; "
+            "posting back to current portal URL instead of placeholder action."
+        )
+        return final_url
+    return action or final_url
+
+
 def _portal_redirect_from_query(final_url, portal_url=None):
     for url in (final_url, portal_url):
         if not url:
@@ -791,14 +805,7 @@ def try_auto_accept(portal_url, base_url=None):
         )
         return False
 
-    query_action = _portal_action_from_query(final_url, portal_url)
-    if _is_cisco_portal_form(form) and not query_action:
-        log(
-            "Captive portal auto-accept: Cisco-style form has no switch_url; "
-            "not submitting placeholder action. Need redirected portal URL with switch_url."
-        )
-        return False
-    action = query_action or form.get("action") or final_url
+    action = _portal_form_action(form, final_url, portal_url)
 
     post_url = _portal_submit_url(final_url, action, base_url)
     if urlparse(post_url).scheme not in ("http", "https"):
