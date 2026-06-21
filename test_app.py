@@ -360,6 +360,12 @@ def test_search_constants():
          f"MIN_DURATION={mod.MIN_DURATION}")
     test("CONFIG_DIR exists", bool(mod.CONFIG_DIR),
          f"CONFIG_DIR={mod.CONFIG_DIR}")
+    test("Post-portal search retries enabled",
+         mod.POST_PORTAL_SEARCH_RETRIES >= 2,
+         f"POST_PORTAL_SEARCH_RETRIES={mod.POST_PORTAL_SEARCH_RETRIES}")
+    test("Post-portal retry delay enabled",
+         mod.POST_PORTAL_RETRY_DELAY >= 1,
+         f"POST_PORTAL_RETRY_DELAY={mod.POST_PORTAL_RETRY_DELAY}")
 
 
 def test_config_file_location():

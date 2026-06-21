@@ -95,6 +95,8 @@ def _cfg_int(name, default, minimum):
 SEARCH_COUNT = _cfg_int("search_count", 30, 1)
 PLAYLIST_SIZE = _cfg_int("playlist_size", 20, 1)
 MIN_DURATION = _cfg_int("min_duration", 300, 0)
+POST_PORTAL_SEARCH_RETRIES = _cfg_int("post_portal_search_retries", 3, 1)
+POST_PORTAL_RETRY_DELAY = _cfg_int("post_portal_retry_delay", 5, 1)
 _log_lock = threading.Lock()
 
 
@@ -1360,6 +1362,7 @@ class SimpleVideoPlayer:
         try:
             log(FR["starting"].format(keyword))
 
+            portal_resolved = False
             is_captive, _, _ = detect_captive_portal()
             if is_captive:
                 log("Captive portal detected before playback")
@@ -1377,10 +1380,17 @@ class SimpleVideoPlayer:
                 if not result[0]:
                     self._schedule_error(FR["portal_fail"], session_id)
                     return
+                portal_resolved = True
+                self._wait_after_captive_portal(session_id)
             if not self._is_active_session(session_id):
                 return
 
-            urls = self._fetch_playlist(keyword)
+            urls = self._fetch_playlist_with_retries(
+                keyword,
+                session_id,
+                attempts=POST_PORTAL_SEARCH_RETRIES if portal_resolved else 1,
+                delay=POST_PORTAL_RETRY_DELAY,
+            )
 
             if not urls:
                 self._schedule_error(FR["no_videos"].format(keyword), session_id)
@@ -1394,6 +1404,38 @@ class SimpleVideoPlayer:
             import traceback
             log(traceback.format_exc())
             self._schedule_error(str(e), session_id)
+
+    def _wait_after_captive_portal(self, session_id):
+        log("Captive portal accepted; waiting for network to settle before search")
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if not self._is_active_session(session_id):
+                return
+            try:
+                if not detect_captive_portal()[0]:
+                    log("Post-portal connectivity check passed")
+                    time.sleep(2)
+                    return
+            except Exception as e:
+                log(f"Post-portal connectivity check failed: {type(e).__name__}: {e}")
+            time.sleep(1)
+        log("Post-portal connectivity wait timed out; trying search anyway")
+
+    def _fetch_playlist_with_retries(self, keyword, session_id, attempts=1, delay=5):
+        last_error = None
+        for attempt in range(1, attempts + 1):
+            if not self._is_active_session(session_id):
+                return []
+            try:
+                log(f"yt-dlp search attempt {attempt}/{attempts}")
+                return self._fetch_playlist(keyword)
+            except Exception as e:
+                last_error = e
+                log(f"yt-dlp search attempt {attempt}/{attempts} failed: {e}")
+                if attempt >= attempts:
+                    break
+                time.sleep(delay)
+        raise last_error or Exception("Search failed")
 
     def _fetch_playlist(self, keyword):
         log(FR["fetching"].format(keyword))

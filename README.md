@@ -200,8 +200,10 @@ All UI strings live in the language dictionaries near the top of `src/ytkiosk/le
 | `MIN_DURATION` | 300 | Minimum video length in seconds (5 min) |
 | `CONFIG_DIR` | `~/.config/yt-player` | Where keywords and state are saved |
 | `RUNTIME_DIR` | `$XDG_RUNTIME_DIR/yt-player-$UID` or `/tmp/yt-player-$UID` | Private runtime directory for logs and mpv IPC socket |
+| `POST_PORTAL_SEARCH_RETRIES` | 3 | Initial search attempts after captive portal acceptance |
+| `POST_PORTAL_RETRY_DELAY` | 5 | Seconds between post-portal search attempts |
 
-Captive portal defaults are currently tuned for the CISSS Côte-Nord guest WiFi portal. The app tries `https://cisss-public.reg09.rtss.qc.ca/login.html` directly and does not use generic `1.1.1.1` / `neverssl.com` trigger URLs by default. To change this later, add `captive_portal_urls` or `enable_captive_portal_trigger_urls` to `~/.config/yt-player/config.json`.
+Captive portal defaults are currently tuned for the CISSS Côte-Nord guest WiFi portal. The app tries `https://cisss-public.reg09.rtss.qc.ca/login.html` directly and does not use generic `1.1.1.1` / `neverssl.com` trigger URLs by default. The CISSS portal uses a Cisco-style JavaScript button; YTKiosk emulates that by posting `buttonClicked=4` and `redirect_url=<redirect query value>`, and posts back to the current portal URL when `switch_url` is absent. After portal acceptance, YTKiosk waits briefly for connectivity to settle and retries the first YouTube search before showing an error. To change this later, add `captive_portal_urls`, `enable_captive_portal_trigger_urls`, `post_portal_search_retries`, or `post_portal_retry_delay` to `~/.config/yt-player/config.json`.
 
 Use the top-bar **Debug** button while testing captive portals. It opens a live log viewer showing detected portal URLs, selected form/action, submitted field names, HTTP status/final URL, and verification retries. The same log is written to `$XDG_RUNTIME_DIR/yt-player-$UID/yt-player.log` or `/tmp/yt-player-$UID/yt-player.log`.
 

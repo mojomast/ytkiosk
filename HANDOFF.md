@@ -9,10 +9,10 @@ Hospital-grade kiosk YouTube player for Linux Mint. Designed for elderly patient
 - Click a keyword → searches YouTube → fetches **30 videos** → filters long (≥5 min) → picks **20 random long ones** → auto-plays in shuffled order
 - On-screen controls: pause/next/prev/volume/stop/return-to-keywords
 - **Persistent keywords** saved to `~/.config/yt-player/keywords.json`
-- Help dialog for caregivers (French)
+- Help dialog and Debug console for caregivers/testers
 - Exit with confirmation dialog
-- Captive portal detection & auto-accept on public WiFi
-- App and integration smoke tests cover command construction, display fallback, and Tk UI wiring
+- Captive portal detection & auto-accept tuned for the CISSS Côte-Nord guest WiFi portal
+- App tests cover mpv command construction, display fallback, captive portal form parsing/submission, and config defaults; integration smoke tests cover Tk UI wiring
 
 ## Tech Stack
 
@@ -82,6 +82,26 @@ See `docs/DEPENDENCIES.md`, `docs/RELEASE.md`, and
 | `docs/DEPENDENCIES.md` | Linux-only dependency and bundling policy |
 | `docs/RELEASE.md` | Future release bundle checklist |
 
+## Current Install / Update Path
+
+The README one-line install is the primary deployment path:
+
+```bash
+curl -fsSL 'https://raw.githubusercontent.com/mojomast/ytkiosk/main/install.sh?v=2026-06-21.3' | bash
+```
+
+It downloads `install.sh` from `main`; the installer downloads
+`https://github.com/mojomast/ytkiosk/archive/refs/heads/main.tar.gz`, recreates
+`~/.local/share/ytkiosk/venv`, installs the package, and refreshes wrappers in
+`~/.local/bin`. Existing `~/.config/yt-player/keywords.json` and state are
+preserved.
+
+Useful installed commands:
+- `ytkiosk` launches the GUI.
+- `ytkiosk-doctor` checks dependencies and display/runtime state.
+- `ytkiosk-cli doctor` runs the helper doctor command.
+- `ytkiosk-yt-dlp` runs the venv-managed yt-dlp copy.
+
 ## Architecture
 
 ### Flow: Button Click → Fullscreen Playback
@@ -90,6 +110,7 @@ User clicks keyword (e.g. "Voitures classiques")
   │
   ├─► detect_captive_portal()
   │     └─ Portal? → handle_captive_portal() → auto-accept or browser
+  │                  → wait briefly, then retry first yt-dlp search if needed
   │
   ├─► Show loading overlay in main window
   │
@@ -171,8 +192,32 @@ All controls communicate with mpv via a Unix socket in the private per-user runt
 - `stop()` → `stop`
 - Polling loop every 2s syncs UI state with mpv
 
-### Captive Portal (unchanged)
-Same logic as before: probe multiple endpoints, detect redirect, auto-accept or open browser.
+### Captive Portal: CISSS Côte-Nord
+Current deployment focus is the CISSS Côte-Nord guest WiFi portal:
+
+```text
+https://cisss-public.reg09.rtss.qc.ca/login.html
+```
+
+Important implementation details in `src/ytkiosk/legacy.py`:
+- `CAPTIVE_PORTAL_URLS` defaults to the CISSS portal URL.
+- `ENABLE_CAPTIVE_PORTAL_TRIGGER_URLS` defaults to `False`, so `1.1.1.1` and `neverssl.com` are not attempted unless config opts in.
+- The CISSS page is Cisco-style: the visible `Accepter` control is `input type="button"`, not a submit input.
+- Browser JavaScript normally sets `buttonClicked=4`, fills `redirect_url` from the `redirect=` query parameter, and submits the form.
+- Some variants include `switch_url=...`; when present, YTKiosk posts there.
+- The hospital-tested variant only has `redirect=http://detectportal.firefox.com/canonical.html`; when `switch_url` is missing and the form action is the placeholder `google.ca`, YTKiosk posts back to the current `login.html?...redirect=...` URL instead.
+- After portal acceptance, `_wait_after_captive_portal()` waits for connectivity to settle, then `_fetch_playlist_with_retries()` retries the initial search. Defaults: `POST_PORTAL_SEARCH_RETRIES=3`, `POST_PORTAL_RETRY_DELAY=5`.
+
+Debugging:
+- The top-bar **Debug** button opens a live tail of `LOG_FILE`.
+- Logs redact query strings in URLs as `<query>`.
+- Captive portal logs include fetch status/final URL/content type, selected form action/post URL, field names/types, submitted field names, submit status/final URL, and retry outcomes.
+
+Config overrides in `~/.config/yt-player/config.json`:
+- `captive_portal_urls`: string comma list or JSON list of portal URLs.
+- `enable_captive_portal_trigger_urls`: boolean to re-enable generic trigger URLs.
+- `post_portal_search_retries`: integer retry count after portal acceptance.
+- `post_portal_retry_delay`: integer seconds between post-portal search retries.
 
 ## Key Architecture Decisions
 
@@ -211,10 +256,18 @@ Keywords now saved to `~/.config/yt-player/keywords.json`.
 ### Bug 4: "mpv pops up as separate window" (FIXED — embedded with `--wid`)
 mpv now renders inside the tkinter window via X11/XWayland embedding. Native Wayland sessions use standalone fullscreen fallback instead of attempting unsupported native embedding.
 
+### Bug 5: CISSS captive portal loops or posts to Google (FIXED)
+**Root cause:** The portal's form action is a placeholder (`https://www.google.ca`). Browser JavaScript rewrites the action or posts back to the current portal URL while setting hidden fields. A non-JS client must emulate this.
+**Fix:** Detect Cisco-style forms, set `buttonClicked=4`, fill `redirect_url`, prefer `switch_url` when provided, and otherwise post to the current CISSS `login.html?...redirect=...` URL instead of Google.
+
+### Bug 6: First search fails immediately after portal acceptance (FIXED)
+**Root cause:** Network authorization/DNS can lag briefly after captive portal acceptance, so the first `yt-dlp` search can fail even though a second keyword click works.
+**Fix:** After portal success, wait for connectivity to settle and retry the first playlist search before surfacing an error.
+
 ## Known Issues / Gotchas
 
 1. **X11-oriented embedding** — mpv uses Tk's X11 window ID via `--wid`; native Wayland embedding is unsupported and falls back to standalone fullscreen mpv.
-2. **Captive portal auto-accept is best-effort** — works for simple "click agree" portals, not complex login portals.
+2. **Captive portal auto-accept is deployment-tuned** — currently optimized for CISSS Côte-Nord. Other portals may need config changes or new parser rules.
 3. **Daemon worker threads** — stale playback startup callbacks are session-guarded, but workers are still daemon threads during app shutdown.
 4. **Duration filter may be too aggressive** — `MIN_DURATION=300` (5 min) might filter out good content for some keywords. Adjust config if needed.
 5. **yt-dlp rate limiting** — YouTube may throttle after repeated requests. Add `--sleep-requests 1` if issues arise.
