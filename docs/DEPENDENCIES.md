@@ -77,3 +77,12 @@ sudo apt install -y python3 python3-tk mpv xdg-utils x11-xserver-utils
 
 `xset` comes from `x11-xserver-utils`; `xdg-open` comes from `xdg-utils`.
 Both are optional for core playback.
+
+## Captive Portals
+
+When normal connectivity checks fail, YTKiosk tries plain HTTP trigger URLs such
+as `http://1.1.1.1/` and `http://neverssl.com/`. These URLs commonly get
+intercepted by hospital, hotel, and public WiFi captive portals. If a portal
+page is found, YTKiosk attempts best-effort in-app auto-accept by submitting
+forms with common accept/agree/continue/connect buttons, then retries in-app
+instead of automatically opening an external browser.

@@ -313,6 +313,27 @@ PROBE_URLS = [
     "http://connectivity-check.ubuntu.com/generate_204",
 ]
 
+CAPTIVE_PORTAL_TRIGGER_URLS = [
+    "http://1.1.1.1/",
+    "http://neverssl.com/",
+]
+
+ACCEPT_WORDS = (
+    "accept",
+    "agree",
+    "continue",
+    "connect",
+    "start",
+    "submit",
+    "login",
+    "log in",
+    "i agree",
+    "j'accepte",
+    "accepter",
+    "continuer",
+    "connexion",
+)
+
 EXPECTED = {
     "http://connectivitycheck.gstatic.com/generate_204": (204, None),
     "http://captive.apple.com/hotspot-detect.html": (200, "Success"),
@@ -322,6 +343,7 @@ EXPECTED = {
 
 
 def detect_captive_portal():
+    last_failed_url = None
     for url in PROBE_URLS:
         expected_status, expected_text = EXPECTED.get(url, (200, None))
         req = urllib.request.Request(url, method="GET")
@@ -344,11 +366,32 @@ def detect_captive_portal():
                     if portal_url:
                         abs_url = urljoin(url, portal_url)
                         return True, abs_url, url
+                if e.code in (401, 403, 511):
+                    return True, CAPTIVE_PORTAL_TRIGGER_URLS[0], url
                 return False, None, url
             finally:
                 e.close()
         except (urllib.error.URLError, OSError, ValueError):
-            return False, None, url
+            last_failed_url = url
+
+    # Many captive portals only reveal themselves when a plain HTTP IP is opened.
+    for url in CAPTIVE_PORTAL_TRIGGER_URLS:
+        req = urllib.request.Request(url, method="GET")
+        req.add_header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64)")
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.url != url or resp.status in (200, 30, 301, 302, 303, 307, 308):
+                    return True, resp.url or url, url
+        except urllib.error.HTTPError as e:
+            try:
+                portal_url = e.headers.get("Location")
+                return True, urljoin(url, portal_url) if portal_url else url, url
+            finally:
+                e.close()
+        except (urllib.error.URLError, OSError, ValueError):
+            continue
+    if last_failed_url:
+        return True, CAPTIVE_PORTAL_TRIGGER_URLS[0], last_failed_url
     return False, None, None
 
 
@@ -359,6 +402,8 @@ class PortalFormParser(html.parser.HTMLParser):
         self.fields = []
         self._in_form = False
         self._current = {}
+        self._current_button = None
+        self.has_accept_submit = False
 
     def handle_starttag(self, tag, attrs):
         d = dict(attrs)
@@ -366,25 +411,41 @@ class PortalFormParser(html.parser.HTMLParser):
             self._in_form = True
             self.form_action = d.get("action")
         if self._in_form and tag == "input":
+            ftype = d.get("type", "").lower()
             field = {
                 "name": d.get("name", ""),
                 "value": d.get("value", ""),
-                "type": d.get("type", ""),
+                "type": ftype,
             }
+            if ftype in ("submit", "button"):
+                label = f"{field['name']} {field['value']}".lower()
+                if any(word in label for word in ACCEPT_WORDS):
+                    self.has_accept_submit = True
             if field.get("name"):
                 self.fields.append(field)
-        if self._in_form and tag == "button" and d.get("type") == "submit":
+        if self._in_form and tag == "button" and d.get("type", "submit") == "submit":
             field = {
                 "name": d.get("name", ""),
                 "value": d.get("value", "submit"),
                 "type": "submit",
             }
+            self._current_button = field
             if field.get("name"):
                 self.fields.append(field)
+
+    def handle_data(self, data):
+        if self._in_form and self._current_button is not None:
+            text = data.strip()
+            if text and any(word in text.lower() for word in ACCEPT_WORDS):
+                self.has_accept_submit = True
+                if not self._current_button.get("value"):
+                    self._current_button["value"] = text
 
     def handle_endtag(self, tag):
         if tag == "form":
             self._in_form = False
+        if tag == "button":
+            self._current_button = None
 
 
 def try_auto_accept(portal_url, base_url=None):
@@ -395,42 +456,62 @@ def try_auto_accept(portal_url, base_url=None):
     except Exception:
         return False
 
+
     parser = PortalFormParser()
     parser.feed(html_content)
 
     action = parser.form_action
     if not action:
-        return False
+        action = portal_url
 
     post_url = urljoin(base_url or portal_url, action)
+    if urlparse(post_url).scheme not in ("http", "https"):
+        return False
     data = {}
     for f in parser.fields:
         name = f.get("name", "")
         val = f.get("value", "")
         ftype = f.get("type", "")
         if name:
+            label = f"{name} {val}".lower()
             if ftype == "checkbox":
                 lv = val.lower()
-                if lv in ("", "agree", "accept", "yes", "1", "true"):
+                if lv in ("", "agree", "accept", "yes", "1", "true") or any(
+                    word in label for word in ACCEPT_WORDS
+                ):
                     data[name] = val if val else "agree"
-            elif ftype == "submit":
+            elif ftype == "submit" and any(word in label for word in ACCEPT_WORDS):
                 data[name] = val if val else "Submit"
             else:
                 data[name] = val if val else ""
 
-    if not data:
+    if not data and not parser.has_accept_submit:
         return False
 
     encoded = urlencode(data).encode()
     try:
-        req2 = urllib.request.Request(
-            post_url, data=encoded, headers={"User-Agent": "Mozilla/5.0"}
-        )
+        req2 = urllib.request.Request(post_url, data=encoded, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req2, timeout=10):
             pass
         return True
     except Exception:
         return False
+
+
+def try_auto_accept_any(portal_url=None):
+    urls = []
+    if portal_url:
+        urls.append(portal_url)
+    urls.extend(CAPTIVE_PORTAL_TRIGGER_URLS)
+
+    seen = set()
+    for url in urls:
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        if try_auto_accept(url):
+            return True
+    return False
 
 
 def handle_captive_portal(root, on_done):
@@ -460,7 +541,7 @@ def handle_captive_portal(root, on_done):
         def _try_auto():
             status_var.set("Tentative d'acceptation automatique...")
             dlg.update()
-            accepted = try_auto_accept(portal_url) if portal_url else False
+            accepted = try_auto_accept_any(portal_url)
             if accepted:
                 time.sleep(1)
                 still = detect_captive_portal()[0]
@@ -468,11 +549,12 @@ def handle_captive_portal(root, on_done):
                     status_var.set(FR["portal_auto_ok"])
                     dlg.after(1000, lambda: _done(True))
                     return
-            _open_browser(portal_url)
+            status_var.set("Portail détecté. Nouvelle tentative automatique...")
+            dlg.after(3000, _try_auto)
 
         def _open_browser(url):
             status_var.set("Ouverture du navigateur...")
-            open_url = url or PROBE_URLS[0]
+            open_url = url or CAPTIVE_PORTAL_TRIGGER_URLS[0]
             if urlparse(open_url).scheme not in ("http", "https"):
                 _done(False)
                 return
