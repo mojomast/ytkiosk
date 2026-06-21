@@ -7,6 +7,7 @@ import threading
 import time
 import os
 import json
+import locale
 import socket
 import urllib.request
 import urllib.error
@@ -15,14 +16,45 @@ from urllib.parse import urljoin, urlparse
 import random
 
 CONFIG_DIR = os.path.expanduser("~/.config/yt-player")
+
+
+def _load_config():
+    try:
+        path = os.path.join(CONFIG_DIR, "config.json")
+        if os.path.exists(path):
+            with open(path) as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {}
+
+
+_cfg = _load_config()
 KEYWORDS_FILE = os.path.join(CONFIG_DIR, "keywords.json")
+STATE_FILE = os.path.join(CONFIG_DIR, "state.json")
 LOG_FILE = "/tmp/yt-player.log"
 MPV_SOCKET = "/tmp/mpv-socket"
 MPV = "/usr/bin/mpv"
 YTDLP = "/usr/local/bin/yt-dlp"
-SEARCH_COUNT = 30
-PLAYLIST_SIZE = 20
-MIN_DURATION = 300
+SEARCH_COUNT = _cfg.get("search_count", 30)
+PLAYLIST_SIZE = _cfg.get("playlist_size", 20)
+MIN_DURATION = _cfg.get("min_duration", 300)
+
+
+def _detect_audio_backend():
+    try:
+        result = subprocess.run(
+            ["pactl", "info"], capture_output=True, text=True, timeout=3
+        )
+        if "PipeWire" in result.stdout:
+            return "pipewire"
+        if result.returncode == 0:
+            return "pulse"
+    except Exception:
+        pass
+    return "alsa"
 
 
 def log(msg):
@@ -32,7 +64,7 @@ def log(msg):
 
 log("=== App started ===")
 
-FR = {
+STRINGS_FR = {
     "title": "Lecteur Vidéo Simple",
     "add_keyword": "+ Ajouter un mot-clé",
     "exit": "QUITTER",
@@ -96,6 +128,75 @@ FR = {
     "playlist_ended": "Liste de lecture terminée",
 }
 
+STRINGS_EN = {
+    "title": "Simple Video Player",
+    "add_keyword": "+ Add keyword",
+    "exit": "QUIT",
+    "edit": "✎",
+    "edit_title": "Edit keyword",
+    "edit_prompt": "Enter a new keyword:",
+    "add_title": "Add keyword",
+    "add_prompt": "Enter a keyword to search:",
+    "no_videos": "No videos found for '{}'",
+    "ytdlp_failed": "Search failed:\n{}",
+    "mpv_exited": "mpv stopped (code {})",
+    "error": "Error",
+    "fetching": "Searching videos for:\n{}",
+    "starting": "Starting playback for: {}",
+    "killed": "Previous mpv stopped",
+    "selecting": "Selecting best videos...",
+    "launching": "Launching with {} videos",
+    "mpv_ok": "mpv running",
+    "mpv_dead": "mpv stopped early (code {})",
+    "control_play": "▶",
+    "control_pause": "⏸",
+    "control_next": "⏭",
+    "control_prev": "⏮",
+    "control_stop": "Stop",
+    "control_keywords": "Keywords",
+    "volume": "Volume",
+    "now_playing": "Now playing:",
+    "portal_detected": "Captive portal detected",
+    "portal_msg": "A captive portal is blocking access. Opening browser to connect...",
+    "portal_success": "Connection restored!",
+    "portal_fail": "Could not connect to captive portal.",
+    "portal_auto_ok": "Portal accepted automatically!",
+    "connectivity_check": "Checking connection...",
+    "retry": "Retry",
+    "cancel": "Cancel",
+    "help": "Help",
+    "help_title": "Help - Simple Video Player",
+    "help_text": (
+        "This program lets users watch YouTube videos based on selected themes.\n\n"
+        "--- FOR CAREGIVERS ---\n\n"
+        "1. Click a keyword to start automatic playback\n"
+        "2. ✎ lets you edit a keyword\n"
+        "3. \"+ Add keyword\" lets you add a new theme\n\n"
+        "DURING PLAYBACK:\n"
+        "  ▶/⏸  Play / Pause\n"
+        "  ⏮    Previous video\n"
+        "  ⏭    Next video\n"
+        "  Volume  Slider to adjust the sound\n"
+        "  Stop    Stops playback\n"
+        "  Keywords  Return to the theme list\n\n"
+        "Long videos are prioritized.\n"
+        "The playlist is shuffled randomly.\n"
+        "Keywords are saved automatically.\n\n"
+        "TO EXIT: click EXIT, then confirm."
+    ),
+    "confirm_exit_title": "Confirm",
+    "confirm_exit_msg": "Are you sure you want to quit?",
+    "yes": "Yes",
+    "no": "No",
+    "loading_duration": "Checking durations...",
+    "playlist_ended": "Playlist ended",
+}
+
+_locale = locale.getdefaultlocale()
+_default_lang = _locale[0] if isinstance(_locale, tuple) else _locale
+_lang = os.environ.get("YTKIOSK_LANG", _default_lang or "en")
+FR = STRINGS_FR if _lang.startswith("fr") else STRINGS_EN
+
 INITIAL_KEYWORDS = [
     "Voitures classiques",
     "Compilations d'animaux",
@@ -153,6 +254,12 @@ class MpvRemote:
 
     def get_media_title(self):
         return self._send("get_property", ["media-title"])
+
+    def get_playlist_pos(self):
+        return self._send("get_property", ["playlist-pos"])
+
+    def get_playlist_count(self):
+        return self._send("get_property", ["playlist-count"])
 
     def is_running(self):
         return self._send("get_property", ["time-pos"]) is not None
@@ -370,8 +477,11 @@ class SimpleVideoPlayer:
         self.mpv = MpvRemote()
         self._paused = False
         self._volume = 75
+        self._volume = self._load_state().get("volume", 75)
         self._playing = False
         self._loading = False
+        self._playlist_ending = False
+        self._volume_save_after_id = None
 
         self._setup_kiosk()
         self._build_ui()
@@ -384,6 +494,15 @@ class SimpleVideoPlayer:
         self.root.focus_force()
 
         self.root.protocol("WM_DELETE_WINDOW", self._confirm_exit)
+
+        try:
+            subprocess.Popen(
+                ["xset", "s", "off", "-dpms"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
 
         for key in ("<Escape>", "<F11>", "<Control-q>"):
             self.root.bind(key, lambda e: "break")
@@ -638,6 +757,7 @@ class SimpleVideoPlayer:
         if self._playing:
             self._stop_playback()
         self.current_keyword = keyword
+        self._playlist_ending = False
         self._loading = True
         self._show_loading(FR["fetching"].format(keyword))
         threading.Thread(target=self._play_keyword, args=(keyword,), daemon=True).start()
@@ -685,17 +805,23 @@ class SimpleVideoPlayer:
     def _fetch_playlist(self, keyword):
         log(FR["fetching"].format(keyword))
 
-        result = subprocess.run(
-            [
-                YTDLP,
-                f"ytsearch{SEARCH_COUNT}:{keyword}",
-                "--flat-playlist",
-                "--ignore-errors",
-                "--match-filters", f"duration > {MIN_DURATION} & !is_live",
-                "--print", "%(id)s\t%(duration)s",
-            ],
-            capture_output=True, text=True, timeout=60,
-        )
+        try:
+            result = subprocess.run(
+                [
+                    YTDLP,
+                    f"ytsearch{SEARCH_COUNT}:{keyword}",
+                    "--flat-playlist",
+                    "--ignore-errors",
+                    "--match-filters", f"duration > {MIN_DURATION} & !is_live",
+                    "--retries", "5",
+                    "--fragment-retries", "5",
+                    "--socket-timeout", "15",
+                    "--print", "%(id)s\t%(duration)s",
+                ],
+                capture_output=True, text=True, timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            raise Exception("Search timed out. Check network connection.")
         log(f"yt-dlp rc={result.returncode}")
 
         if result.returncode != 0:
@@ -746,10 +872,13 @@ class SimpleVideoPlayer:
             "--no-config",
             f"--input-ipc-server={MPV_SOCKET}",
             "--keep-open=always",
-            "--vo=x11",
-            "--ao=pulse",
+            # Fallback for Wayland/no-GPU edge cases: replace with "--vo=x11".
+            "--vo=gpu",
+            "--hwdec=auto",
+            "--gpu-context=x11egl",
+            f"--ao={_detect_audio_backend()}",
             "--profile=fast",
-            "--x11-bypass-compositor=no",
+            "--x11-bypass-compositor=yes",
             "--ytdl-format=bv[height<=720]+ba/b[height<=720]",
         ] + urls
 
@@ -764,13 +893,27 @@ class SimpleVideoPlayer:
         )
         log(f"mpv pid={self.mpv_proc.pid}")
 
-        time.sleep(2)
+        threading.Thread(target=self._wait_for_mpv, args=(urls,), daemon=True).start()
 
-        if self.mpv_proc.poll() is not None:
-            log(FR["mpv_dead"].format(self.mpv_proc.returncode))
-            self._on_error(FR["mpv_exited"].format(self.mpv_proc.returncode))
+    def _wait_for_mpv(self, urls):
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            if self.mpv_proc and self.mpv_proc.poll() is not None:
+                code = self.mpv_proc.returncode
+                log(FR["mpv_dead"].format(code))
+                self.root.after(
+                    0, lambda code=code: self._on_error(FR["mpv_exited"].format(code))
+                )
+                return
+            if self.mpv.is_running():
+                self.root.after(0, self._on_mpv_ready)
+                return
+            time.sleep(0.2)
+        self.root.after(0, lambda: self._on_error("mpv did not respond within 10 seconds"))
+
+    def _on_mpv_ready(self):
+        if not self.mpv_proc or self.mpv_proc.poll() is not None:
             return
-
         log(FR["mpv_ok"])
         self._playing = True
         self._loading = False
@@ -833,6 +976,12 @@ class SimpleVideoPlayer:
     def _on_volume_change(self, val):
         self._volume = float(val)
         self.mpv.set_volume(self._volume)
+        if self._volume_save_after_id is not None:
+            try:
+                self.root.after_cancel(self._volume_save_after_id)
+            except tk.TclError:
+                pass
+        self._volume_save_after_id = self.root.after(1000, self._save_state)
 
     # ── Help and exit ───────────────────────────────────────────
 
@@ -900,9 +1049,32 @@ class SimpleVideoPlayer:
             os.makedirs(CONFIG_DIR, exist_ok=True)
             with open(KEYWORDS_FILE, "w") as f:
                 json.dump(self.keywords, f, indent=2)
+            self._save_state()
             log("Keywords saved")
         except Exception as e:
             log(f"Failed to save keywords: {e}")
+
+    def _load_state(self):
+        try:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            if os.path.exists(STATE_FILE):
+                with open(STATE_FILE) as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+        except Exception as e:
+            log(f"Failed to load state: {e}")
+        return {}
+
+    def _save_state(self):
+        self._volume_save_after_id = None
+        try:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            with open(STATE_FILE, "w") as f:
+                json.dump({"volume": self._volume}, f, indent=2)
+            log("State saved")
+        except Exception as e:
+            log(f"Failed to save state: {e}")
 
     # ── UI polling ──────────────────────────────────────────────
 
@@ -912,8 +1084,18 @@ class SimpleVideoPlayer:
             return
 
         if self.mpv_proc and self.mpv_proc.poll() is not None:
-            log("mpv process died, returning to keyword selection")
-            self._stop_playback()
+            if self._playlist_ending and self.current_keyword:
+                log(FR["playlist_ended"])
+                self._playlist_ending = False
+                self._playing = False
+                threading.Thread(
+                    target=self._play_keyword,
+                    args=(self.current_keyword,),
+                    daemon=True,
+                ).start()
+            else:
+                log("mpv process died, returning to keyword selection")
+                self._stop_playback()
         elif self.mpv_proc and self.mpv_proc.poll() is None:
             self._update_mpv_title()
             try:
@@ -928,6 +1110,16 @@ class SimpleVideoPlayer:
                     self.play_btn.config(
                         text=FR["control_play"] if p else FR["control_pause"]
                     )
+                pos = self.mpv.get_playlist_pos()
+                count = self.mpv.get_playlist_count()
+                if (
+                    pos is not None
+                    and count is not None
+                    and count > 0
+                    and pos == count - 1
+                    and p is False
+                ):
+                    self._playlist_ending = True
             except Exception:
                 pass
         self.root.after(2000, self._poll_mpv)

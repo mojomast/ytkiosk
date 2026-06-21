@@ -4,6 +4,7 @@ import subprocess
 import sys
 import os
 import importlib.util
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -68,18 +69,22 @@ def test_mpv_command_format():
         "--no-config",
         "--input-ipc-server=/tmp/mpv-socket",
         "--keep-open=always",
-        "--gpu-context=x11egl", "--ao=pulse",
-        "--profile=fast", "--gpu-dumb-mode=yes",
-        "--x11-bypass-compositor=no",
+        "--vo=gpu",
+        "--hwdec=auto",
+        "--gpu-context=x11egl",
+        "--ao=pulse",
+        "--profile=fast",
+        "--x11-bypass-compositor=yes",
         "--ytdl-format=bv[height<=720]+ba/b[height<=720]",
     ] + urls
     required = [
         "--osd-level=0", "--no-config",
         "--input-ipc-server=/tmp/mpv-socket",
         "--keep-open=always",
+        "--vo=gpu", "--hwdec=auto",
         "--gpu-context=x11egl", "--ao=pulse",
-        "--profile=fast", "--gpu-dumb-mode=yes",
-        "--x11-bypass-compositor=no",
+        "--profile=fast",
+        "--x11-bypass-compositor=yes",
         "--ytdl-format=bv[height<=720]+ba/b[height<=720]",
     ]
     test("mpv command has all required args",
@@ -106,11 +111,28 @@ def test_app_script_syntax():
         test("App script has valid syntax", False, str(e))
 
 
-def _import_module():
-    spec = importlib.util.spec_from_file_location("svp", APP_PATH)
+def _import_module(name="svp"):
+    spec = importlib.util.spec_from_file_location(name, APP_PATH)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def _import_module_with_env(name, env):
+    old_env = {k: os.environ.get(k) for k in env}
+    try:
+        for k, v in env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        return _import_module(name)
+    finally:
+        for k, v in old_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 def test_french_keywords():
@@ -140,10 +162,37 @@ def test_french_strings():
          f"missing: {missing}")
 
 
+def test_i18n_selection():
+    fr_mod = _import_module_with_env("svp_fr", {"YTKIOSK_LANG": "fr"})
+    en_mod = _import_module_with_env("svp_en", {"YTKIOSK_LANG": "en"})
+    test("YTKIOSK_LANG=fr selects STRINGS_FR",
+         fr_mod.FR is fr_mod.STRINGS_FR)
+    test("YTKIOSK_LANG=en selects STRINGS_EN",
+         en_mod.FR is en_mod.STRINGS_EN)
+    test("French and English string keys match",
+         set(en_mod.STRINGS_FR) == set(en_mod.STRINGS_EN))
+
+
 def test_mpv_remote_socket_path():
     mod = _import_module()
     test("mpv socket is /tmp/mpv-socket",
          mod.MPV_SOCKET == "/tmp/mpv-socket", f"got {mod.MPV_SOCKET}")
+
+
+def test_mpv_remote_playlist_methods():
+    mod = _import_module()
+    test("MpvRemote has get_playlist_pos",
+         hasattr(mod.MpvRemote, "get_playlist_pos"))
+    test("MpvRemote has get_playlist_count",
+         hasattr(mod.MpvRemote, "get_playlist_count"))
+
+
+def test_audio_backend_detection():
+    mod = _import_module()
+    backend = mod._detect_audio_backend()
+    test("Audio backend detection returns known backend",
+         backend in ("pulse", "pipewire", "alsa"),
+         f"got {backend}")
 
 
 def test_search_constants():
@@ -163,6 +212,25 @@ def test_config_file_location():
     test("KEYWORDS_FILE ends with keywords.json",
          mod.KEYWORDS_FILE.endswith("keywords.json"),
          f"got {mod.KEYWORDS_FILE}")
+
+
+def test_load_config_missing_defaults():
+    old_home = os.environ.get("HOME")
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            os.environ["HOME"] = tmp
+            mod = _import_module("svp_config_missing")
+            cfg = mod._load_config()
+            test("_load_config returns empty dict when missing",
+                 cfg == {}, f"got {cfg}")
+            test("Missing config uses default constants",
+                 (mod.SEARCH_COUNT, mod.PLAYLIST_SIZE, mod.MIN_DURATION) == (30, 20, 300),
+                 f"got {(mod.SEARCH_COUNT, mod.PLAYLIST_SIZE, mod.MIN_DURATION)}")
+        finally:
+            if old_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = old_home
 
 
 def test_ytdlp_search():
@@ -217,6 +285,25 @@ def test_persistent_keywords():
          f"got {mod.KEYWORDS_FILE}")
 
 
+def test_load_state_missing_defaults():
+    old_home = os.environ.get("HOME")
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            os.environ["HOME"] = tmp
+            mod = _import_module("svp_state_missing")
+            app = object.__new__(mod.SimpleVideoPlayer)
+            state = app._load_state()
+            test("_load_state returns empty dict when missing",
+                 state == {}, f"got {state}")
+            test("Missing state yields default volume",
+                 state.get("volume", 75) == 75, f"got {state}")
+        finally:
+            if old_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = old_home
+
+
 def test_kiosk_constants():
     mod = _import_module()
     test("LOG_FILE is /tmp/yt-player.log",
@@ -240,12 +327,17 @@ if __name__ == "__main__":
     test_app_script_syntax()
     test_french_keywords()
     test_french_strings()
+    test_i18n_selection()
     test_mpv_remote_socket_path()
+    test_mpv_remote_playlist_methods()
+    test_audio_backend_detection()
 
     print("\n--- Configuration ---")
     test_search_constants()
     test_config_file_location()
+    test_load_config_missing_defaults()
     test_persistent_keywords()
+    test_load_state_missing_defaults()
     test_kiosk_constants()
 
     print("\n--- YouTube Search (French keywords) ---")
