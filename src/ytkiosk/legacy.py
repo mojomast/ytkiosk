@@ -9,6 +9,7 @@ import os
 import json
 import locale
 import socket
+import http.cookiejar
 import urllib.request
 import urllib.error
 import html.parser
@@ -399,6 +400,7 @@ class PortalFormParser(html.parser.HTMLParser):
     def __init__(self):
         super().__init__()
         self.form_action = None
+        self.form_method = "get"
         self.fields = []
         self._in_form = False
         self._current = {}
@@ -410,6 +412,7 @@ class PortalFormParser(html.parser.HTMLParser):
         if tag == "form":
             self._in_form = True
             self.form_action = d.get("action")
+            self.form_method = d.get("method", "get").lower()
         if self._in_form and tag == "input":
             ftype = d.get("type", "").lower()
             field = {
@@ -450,9 +453,12 @@ class PortalFormParser(html.parser.HTMLParser):
 
 def try_auto_accept(portal_url, base_url=None):
     log(f"Captive portal auto-accept: fetching {portal_url}")
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
     try:
         req = urllib.request.Request(portal_url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with opener.open(req, timeout=10) as resp:
+            final_url = resp.url
             html_content = resp.read().decode("utf-8", errors="replace")
     except Exception as e:
         log(f"Captive portal fetch failed for {portal_url}: {e}")
@@ -466,7 +472,7 @@ def try_auto_accept(portal_url, base_url=None):
     if not action:
         action = portal_url
 
-    post_url = urljoin(base_url or portal_url, action)
+    post_url = urljoin(base_url or final_url, action)
     if urlparse(post_url).scheme not in ("http", "https"):
         return False
     log(f"Captive portal auto-accept: submitting {post_url}")
@@ -491,10 +497,21 @@ def try_auto_accept(portal_url, base_url=None):
     if not data and not parser.has_accept_submit:
         return False
 
-    encoded = urlencode(data).encode()
+    encoded = urlencode(data)
     try:
-        req2 = urllib.request.Request(post_url, data=encoded, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req2, timeout=10):
+        if parser.form_method == "get":
+            sep = "&" if "?" in post_url else "?"
+            req2 = urllib.request.Request(
+                post_url + sep + encoded,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+        else:
+            req2 = urllib.request.Request(
+                post_url,
+                data=encoded.encode(),
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+        with opener.open(req2, timeout=10):
             pass
         return True
     except Exception as e:
@@ -553,41 +570,94 @@ def handle_captive_portal(root, on_done):
         status_lbl.pack(pady=5)
 
         attempt_count = [0]
+        attempt_running = [False]
+        current_portal_url = [portal_url]
+
+        def _set_status(text):
+            try:
+                if dlg.winfo_exists():
+                    status_var.set(text)
+            except tk.TclError:
+                pass
 
         def _set_attempt_status(url):
-            status_var.set(f"Tentative {attempt_count[0]} :\n{url}")
             log(f"Captive portal attempt {attempt_count[0]}: {url}")
-            dlg.update_idletasks()
+            dlg.after(0, lambda url=url: _set_status(
+                f"Tentative {attempt_count[0]} :\n{url}"
+            ))
 
-        def _try_auto():
-            attempt_count[0] += 1
-            status_var.set(f"Tentative automatique {attempt_count[0]}...")
-            dlg.update()
-            include_triggers = portal_url is None or attempt_count[0] > 2
-            accepted, accepted_url = try_auto_accept_any(
-                portal_url,
-                include_triggers=include_triggers,
-                on_attempt=_set_attempt_status,
-            )
-            if accepted:
-                status_var.set(f"Formulaire envoyé :\n{accepted_url}")
-                time.sleep(1)
-                still = detect_captive_portal()[0]
-                if not still:
-                    status_var.set(FR["portal_auto_ok"])
-                    dlg.after(1000, lambda: _done(True))
-                    return
-            status_var.set(
-                "Portail toujours détecté.\n"
-                "Nouvelle tentative automatique dans 3 secondes..."
-            )
+        def _finish_attempt(ok, accepted_url=None):
+            attempt_running[0] = False
+            if ok:
+                _set_status(FR["portal_auto_ok"])
+                dlg.after(1000, lambda: _done(True))
+                return
+            if accepted_url:
+                _set_status(
+                    f"Formulaire envoyé, mais le portail est toujours actif :\n"
+                    f"{accepted_url}\n\n"
+                    "Nouvelle tentative automatique dans 3 secondes..."
+                )
+            else:
+                _set_status(
+                    "Portail toujours détecté.\n"
+                    "Nouvelle tentative automatique dans 3 secondes..."
+                )
             dlg.after(3000, _try_auto)
 
+        def _try_auto():
+            if attempt_running[0]:
+                return
+            attempt_running[0] = True
+            attempt_count[0] += 1
+            _set_status(
+                f"Tentative automatique {attempt_count[0]}...\n"
+                "Recherche de la page du portail..."
+            )
+
+            def _worker():
+                candidate_url = current_portal_url[0]
+                if not candidate_url:
+                    is_captive, detected_url, _ = detect_captive_portal()
+                    if not is_captive:
+                        dlg.after(0, lambda: _finish_attempt(True))
+                        return
+                    if detected_url:
+                        candidate_url = detected_url
+                        current_portal_url[0] = detected_url
+                include_triggers = candidate_url is None or attempt_count[0] > 2
+                accepted, accepted_url = try_auto_accept_any(
+                    candidate_url,
+                    include_triggers=include_triggers,
+                    on_attempt=_set_attempt_status,
+                )
+                if accepted:
+                    dlg.after(0, lambda: _set_status(
+                        f"Formulaire envoyé :\n{accepted_url}\n\n"
+                        "Vérification de la connexion..."
+                    ))
+                    time.sleep(1)
+                    still = detect_captive_portal()[0]
+                    if not still:
+                        dlg.after(0, lambda: _finish_attempt(True, accepted_url))
+                        return
+                dlg.after(0, lambda: _finish_attempt(False, accepted_url))
+
+            threading.Thread(target=_worker, daemon=True).start()
+
+        def _manual_open():
+            open_url = current_portal_url[0] or CAPTIVE_PORTAL_TRIGGER_URLS[0]
+            _set_status(
+                "Ouverture manuelle de la page du portail :\n"
+                f"{open_url}\n\n"
+                "Après acceptation, YTKiosk reprendra automatiquement."
+            )
+            _open_browser(open_url)
+
         def _open_browser(url):
-            status_var.set("Ouverture du navigateur...")
-            open_url = url or CAPTIVE_PORTAL_TRIGGER_URLS[0]
+            open_url = url or current_portal_url[0] or CAPTIVE_PORTAL_TRIGGER_URLS[0]
             if urlparse(open_url).scheme not in ("http", "https"):
-                _done(False)
+                _set_status(f"URL de portail invalide :\n{open_url}")
                 return
             try:
                 subprocess.Popen(
@@ -597,7 +667,7 @@ def handle_captive_portal(root, on_done):
                 )
             except OSError as e:
                 log(f"Failed to open portal browser: {e}")
-                _done(False)
+                _set_status(f"Impossible d'ouvrir la page du portail :\n{e}")
                 return
             _poll()
 
@@ -623,11 +693,15 @@ def handle_captive_portal(root, on_done):
             command=_try_auto
         ).pack(side=tk.LEFT, padx=10)
         tk.Button(
+            btn_frame, text="Ouvrir le portail", font=("TkDefaultFont", 14),
+            command=_manual_open,
+        ).pack(side=tk.LEFT, padx=10)
+        tk.Button(
             btn_frame, text=FR["cancel"], font=("TkDefaultFont", 14),
             command=lambda: _done(False)
         ).pack(side=tk.LEFT, padx=10)
 
-        _try_auto()
+        dlg.after(250, _try_auto)
 
     threading.Thread(target=_run, daemon=True).start()
 

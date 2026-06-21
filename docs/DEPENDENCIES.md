@@ -86,5 +86,12 @@ portal URL is discovered after repeated attempts, it falls back to plain HTTP
 trigger URLs such as `http://1.1.1.1/` and `http://neverssl.com/`, which are
 often intercepted by hospital, hotel, and public WiFi captive portals. YTKiosk
 attempts best-effort in-app auto-accept by submitting forms with common
-accept/agree/continue/connect buttons, then retries in-app instead of
-automatically opening an external browser.
+accept/agree/continue/connect buttons, preserving cookies and following the
+portal page's form method. The dialog shows each URL it is trying and retries
+in-app instead of automatically opening an external browser.
+
+If automatic acceptance cannot complete, the dialog provides an **Open portal**
+button for a caregiver to open the discovered sign-in page manually. This is
+still required for portals with passwords, room numbers, payments, CAPTCHA,
+OAuth/SAML, JavaScript-generated forms, or other browser-only flows. YTKiosk
+does not fill credentials or payment details automatically.
