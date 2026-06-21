@@ -203,6 +203,8 @@ All UI strings live in the language dictionaries near the top of `src/ytkiosk/le
 
 Captive portal defaults are currently tuned for the CISSS Côte-Nord guest WiFi portal. The app tries `https://cisss-public.reg09.rtss.qc.ca/login.html` directly and does not use generic `1.1.1.1` / `neverssl.com` trigger URLs by default. To change this later, add `captive_portal_urls` or `enable_captive_portal_trigger_urls` to `~/.config/yt-player/config.json`.
 
+Use the top-bar **Debug** button while testing captive portals. It opens a live log viewer showing detected portal URLs, selected form/action, submitted field names, HTTP status/final URL, and verification retries. The same log is written to `$XDG_RUNTIME_DIR/yt-player-$UID/yt-player.log` or `/tmp/yt-player-$UID/yt-player.log`.
+
 `mpv` is intentionally not bundled. Future Linux release bundles may include
 the Python app, Python dependencies, and an optional JavaScript runtime sidecar,
 while continuing to use distro `mpv` for playback.

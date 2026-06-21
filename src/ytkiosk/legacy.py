@@ -17,7 +17,7 @@ import tempfile
 import shutil
 import sys
 import unicodedata
-from urllib.parse import parse_qs, urljoin, urlparse, urlencode
+from urllib.parse import parse_qs, urljoin, urlparse, urlencode, urlunparse
 import random
 
 try:
@@ -226,6 +226,10 @@ STRINGS_FR = {
     "retry": "Réessayer",
     "cancel": "Annuler",
     "standalone_mpv": "Session non-X11 détectée : lecture mpv plein écran séparée.",
+    "debug": "Debug",
+    "debug_title": "Debug YTKiosk",
+    "debug_refresh": "Rafraîchir",
+    "debug_clear": "Vider l'affichage",
     "help": "Aide",
     "help_title": "Aide - Lecteur Vidéo Simple",
     "help_text": (
@@ -291,6 +295,10 @@ STRINGS_EN = {
     "retry": "Retry",
     "cancel": "Cancel",
     "standalone_mpv": "Non-X11 session detected: using standalone fullscreen mpv.",
+    "debug": "Debug",
+    "debug_title": "YTKiosk Debug",
+    "debug_refresh": "Refresh",
+    "debug_clear": "Clear View",
     "help": "Help",
     "help_title": "Help - Simple Video Player",
     "help_text": (
@@ -666,6 +674,24 @@ def _origin_for(url):
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def _safe_url(url):
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    if not parsed.query:
+        return url
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, "<query>", parsed.fragment))
+
+
+def _field_summary(fields):
+    result = []
+    for field in fields:
+        name = field.get("name", "") or "<unnamed>"
+        ftype = field.get("type", "") or "text"
+        result.append(f"{name}:{ftype}")
+    return ", ".join(result) if result else "none"
+
+
 def _portal_submit_url(final_url, action=None, base_url=None):
     return urljoin(base_url or final_url, action or final_url)
 
@@ -732,16 +758,21 @@ def _portal_form_data(form, final_url, portal_url=None):
 
 
 def try_auto_accept(portal_url, base_url=None):
-    log(f"Captive portal auto-accept: fetching {portal_url}")
+    log(f"Captive portal auto-accept: fetching {_safe_url(portal_url)}")
     jar = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
     try:
         req = urllib.request.Request(portal_url, headers=BROWSER_HEADERS)
         with opener.open(req, timeout=10) as resp:
             final_url = resp.url
+            log(
+                "Captive portal fetch result: "
+                f"status={getattr(resp, 'status', '?')} final={_safe_url(final_url)} "
+                f"content_type={resp.headers.get('Content-Type', '')}"
+            )
             html_content = resp.read().decode("utf-8", errors="replace")
     except Exception as e:
-        log(f"Captive portal fetch failed for {portal_url}: {e}")
+        log(f"Captive portal fetch failed for {_safe_url(portal_url)}: {type(e).__name__}: {e}")
         return False
 
 
@@ -749,18 +780,28 @@ def try_auto_accept(portal_url, base_url=None):
     parser.feed(html_content)
     form = _select_portal_form(parser)
     if form is None:
-        log("Captive portal auto-accept: no safe accept form found")
+        log(
+            "Captive portal auto-accept: no safe accept form found; "
+            f"forms={len(parser.forms)} has_accept={parser.has_accept_submit}"
+        )
         return False
 
     action = _portal_action_from_query(final_url, portal_url) or form.get("action") or final_url
 
     post_url = _portal_submit_url(final_url, action, base_url)
     if urlparse(post_url).scheme not in ("http", "https"):
+        log(f"Captive portal auto-accept: unsupported submit URL {_safe_url(post_url)}")
         return False
-    log(f"Captive portal auto-accept: submitting {post_url}")
     data = _portal_form_data(form, final_url, portal_url)
+    log(
+        "Captive portal form selected: "
+        f"method={form.get('method', 'get')} action={_safe_url(action)} "
+        f"post={_safe_url(post_url)} fields={_field_summary(form.get('fields', []))} "
+        f"submit_fields={', '.join(data.keys()) or 'none'}"
+    )
 
     if not data and not parser.has_accept_submit:
+        log("Captive portal auto-accept: refusing to submit empty form")
         return False
 
     encoded = urlencode(data)
@@ -785,11 +826,14 @@ def try_auto_accept(portal_url, base_url=None):
                 data=encoded.encode(),
                 headers=headers,
             )
-        with opener.open(req2, timeout=10):
-            pass
+        with opener.open(req2, timeout=10) as resp2:
+            log(
+                "Captive portal submit result: "
+                f"status={getattr(resp2, 'status', '?')} final={_safe_url(resp2.url)}"
+            )
         return True
     except Exception as e:
-        log(f"Captive portal submit failed for {post_url}: {e}")
+        log(f"Captive portal submit failed for {_safe_url(post_url)}: {type(e).__name__}: {e}")
         return False
 
 
@@ -1069,6 +1113,13 @@ class SimpleVideoPlayer:
             relief=tk.FLAT, padx=15, pady=5,
         )
         self.help_btn.pack(side=tk.LEFT, padx=10, pady=5)
+
+        self.debug_btn = tk.Button(
+            self.top_bar, text=FR["debug"], font=("TkDefaultFont", 14),
+            command=self._show_debug, bg="#444", fg="white",
+            relief=tk.FLAT, padx=15, pady=5,
+        )
+        self.debug_btn.pack(side=tk.LEFT, padx=(0, 10), pady=5)
 
         self.status_label = tk.Label(
             self.top_bar, text="", font=("TkDefaultFont", 11),
@@ -1550,6 +1601,122 @@ class SimpleVideoPlayer:
         close_btn.pack(pady=(0, 15))
 
         self.root.wait_window(dlg)
+
+    def _show_debug(self):
+        dlg = tk.Toplevel(self.root)
+        dlg.title(FR["debug_title"])
+        dlg.geometry("900x650")
+        dlg.resizable(True, True)
+        dlg.transient(self.root)
+        dlg.configure(bg="#111")
+
+        header = tk.Label(
+            dlg,
+            text=(
+                f"Log: {LOG_FILE}\n"
+                f"Portal URLs: {', '.join(CAPTIVE_PORTAL_URLS) or 'none'}\n"
+                f"Generic triggers enabled: {ENABLE_CAPTIVE_PORTAL_TRIGGER_URLS}"
+            ),
+            font=("TkDefaultFont", 11),
+            fg="#cccccc",
+            bg="#111",
+            justify=tk.LEFT,
+            anchor="w",
+        )
+        header.pack(fill=tk.X, padx=10, pady=(10, 5))
+
+        text_frame = tk.Frame(dlg, bg="#111")
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=10)
+        scrollbar = tk.Scrollbar(text_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        text_widget = tk.Text(
+            text_frame,
+            wrap=tk.NONE,
+            font=("TkFixedFont", 10),
+            bg="#050505",
+            fg="#e0e0e0",
+            insertbackground="white",
+            yscrollcommand=scrollbar.set,
+        )
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=text_widget.yview)
+
+        state = {"after_id": None}
+
+        def _read_log_tail():
+            try:
+                with open(LOG_FILE, encoding="utf-8", errors="replace") as f:
+                    lines = f.readlines()[-500:]
+                return "".join(lines)
+            except FileNotFoundError:
+                return "Log file not created yet.\n"
+            except Exception as e:
+                return f"Could not read log: {e}\n"
+
+        def _refresh():
+            try:
+                if not dlg.winfo_exists():
+                    return
+                at_bottom = text_widget.yview()[1] > 0.98
+                text_widget.config(state=tk.NORMAL)
+                text_widget.delete("1.0", tk.END)
+                text_widget.insert("1.0", _read_log_tail())
+                text_widget.config(state=tk.DISABLED)
+                if at_bottom:
+                    text_widget.see(tk.END)
+                state["after_id"] = dlg.after(1000, _refresh)
+            except tk.TclError:
+                pass
+
+        def _clear_view():
+            text_widget.config(state=tk.NORMAL)
+            text_widget.delete("1.0", tk.END)
+            text_widget.config(state=tk.DISABLED)
+
+        def _close():
+            if state["after_id"] is not None:
+                try:
+                    dlg.after_cancel(state["after_id"])
+                except tk.TclError:
+                    pass
+            dlg.destroy()
+
+        button_frame = tk.Frame(dlg, bg="#111")
+        button_frame.pack(fill=tk.X, padx=10, pady=10)
+        tk.Button(
+            button_frame,
+            text=FR["debug_refresh"],
+            font=("TkDefaultFont", 13),
+            command=_refresh,
+            bg="#444",
+            fg="white",
+            padx=15,
+            pady=5,
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        tk.Button(
+            button_frame,
+            text=FR["debug_clear"],
+            font=("TkDefaultFont", 13),
+            command=_clear_view,
+            bg="#444",
+            fg="white",
+            padx=15,
+            pady=5,
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        tk.Button(
+            button_frame,
+            text="Fermer" if FR is STRINGS_FR else "Close",
+            font=("TkDefaultFont", 13),
+            command=_close,
+            bg="#666",
+            fg="white",
+            padx=15,
+            pady=5,
+        ).pack(side=tk.RIGHT)
+
+        dlg.protocol("WM_DELETE_WINDOW", _close)
+        log("Debug console opened")
+        _refresh()
 
     def _confirm_exit(self):
         result = messagebox.askyesno(

@@ -33,7 +33,7 @@ def find_keyword_buttons(widget):
                 continue
             if text and text not in (
                 mod.FR["add_keyword"], mod.FR["edit"], mod.FR["exit"],
-                mod.FR["help"],
+                mod.FR["help"], mod.FR["debug"],
             ) and text not in (
                 mod.FR["control_play"], mod.FR["control_pause"],
                 mod.FR["control_next"], mod.FR["control_prev"],
@@ -201,6 +201,28 @@ def test_help_button():
     return help_btn is not None
 
 
+def test_debug_button():
+    root = tk.Tk()
+    root.withdraw()
+    app = SimpleVideoPlayer(root)
+    root.update_idletasks()
+
+    debug_btn = None
+    for child in app.top_bar.winfo_children():
+        if isinstance(child, tk.Button) and child.cget("text") == mod.FR["debug"]:
+            debug_btn = child
+            break
+
+    if debug_btn:
+        print("Debug button found in top bar (good)")
+    else:
+        print("ERROR: Debug button not found!")
+
+    app._cleanup()
+    root.destroy()
+    return debug_btn is not None
+
+
 def test_exit_button():
     root = tk.Tk()
     root.withdraw()
@@ -243,5 +265,8 @@ if __name__ == "__main__":
 
     print("\n--- Test 6: Exit button present ---")
     test_exit_button()
+
+    print("\n--- Test 7: Debug button present ---")
+    test_debug_button()
 
     print("\n=== Integration tests complete ===")
