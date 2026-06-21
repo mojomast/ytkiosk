@@ -237,6 +237,22 @@ def test_audio_backend_detection():
          f"got {backend}")
 
 
+def test_captive_portal_accept_button_detection():
+    mod = _import_module()
+    parser = mod.PortalFormParser()
+    parser.feed(
+        '<form method="post" action="/login">'
+        '<input type="hidden" name="token" value="abc">'
+        '<button type="submit">Accepter</button>'
+        '</form>'
+    )
+    test("Captive portal parser recognizes Accepter button",
+         parser.has_accept_submit)
+    test("Captive portal parser keeps hidden fields",
+         {field["name"]: field["value"] for field in parser.fields}.get("token") == "abc",
+         f"fields={parser.fields}")
+
+
 def test_search_constants():
     mod = _import_module()
     test("SEARCH_COUNT >= 20", mod.SEARCH_COUNT >= 20,
@@ -377,6 +393,7 @@ if __name__ == "__main__":
     test_mpv_remote_socket_path()
     test_mpv_remote_playlist_methods()
     test_audio_backend_detection()
+    test_captive_portal_accept_button_detection()
 
     print("\n--- Configuration ---")
     test_search_constants()

@@ -16,6 +16,7 @@ import html.parser
 import tempfile
 import shutil
 import sys
+import unicodedata
 from urllib.parse import urljoin, urlparse, urlencode
 import random
 
@@ -418,9 +419,12 @@ ACCEPT_WORDS = (
     "log in",
     "i agree",
     "j'accepte",
+    "j accepte",
+    "accepte",
     "accepter",
     "continuer",
     "connexion",
+    "valider",
 )
 
 EXPECTED = {
@@ -429,6 +433,18 @@ EXPECTED = {
     "http://detectportal.firefox.com/success.txt": (200, "success"),
     "http://connectivity-check.ubuntu.com/generate_204": (204, None),
 }
+
+
+def _normalize_accept_text(text):
+    normalized = text.lower().replace("’", "'").replace("‘", "'").replace("`", "'")
+    normalized = unicodedata.normalize("NFKD", normalized)
+    return "".join(ch for ch in normalized if not unicodedata.combining(ch))
+
+
+def _has_accept_word(text):
+    normalized = _normalize_accept_text(text)
+    normalized_spaces = normalized.replace("'", " ")
+    return any(word in normalized or word in normalized_spaces for word in ACCEPT_WORDS)
 
 
 def detect_captive_portal():
@@ -510,7 +526,7 @@ class PortalFormParser(html.parser.HTMLParser):
             }
             if ftype in ("submit", "button"):
                 label = f"{field['name']} {field['value']}".lower()
-                if any(word in label for word in ACCEPT_WORDS):
+                if _has_accept_word(label):
                     self.has_accept_submit = True
             if field.get("name"):
                 self.fields.append(field)
@@ -527,7 +543,7 @@ class PortalFormParser(html.parser.HTMLParser):
     def handle_data(self, data):
         if self._in_form and self._current_button is not None:
             text = data.strip()
-            if text and any(word in text.lower() for word in ACCEPT_WORDS):
+            if text and _has_accept_word(text):
                 self.has_accept_submit = True
                 if not self._current_button.get("value"):
                     self._current_button["value"] = text
@@ -573,11 +589,11 @@ def try_auto_accept(portal_url, base_url=None):
             label = f"{name} {val}".lower()
             if ftype == "checkbox":
                 lv = val.lower()
-                if lv in ("", "agree", "accept", "yes", "1", "true") or any(
-                    word in label for word in ACCEPT_WORDS
+                if lv in ("", "agree", "accept", "yes", "1", "true") or _has_accept_word(
+                    label
                 ):
                     data[name] = val if val else "agree"
-            elif ftype == "submit" and any(word in label for word in ACCEPT_WORDS):
+            elif ftype == "submit" and _has_accept_word(label):
                 data[name] = val if val else "Submit"
             else:
                 data[name] = val if val else ""
