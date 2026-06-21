@@ -285,6 +285,34 @@ def test_captive_portal_submit_url_uses_final_url():
          mod._portal_submit_url(final_url, "/accept") == "http://portal.local/accept")
 
 
+def test_cisco_captive_portal_javascript_defaults():
+    mod = _import_module()
+    portal_url = (
+        "https://cisss-public.reg09.rtss.qc.ca/login.html?"
+        "switch_url=http%3A%2F%2F1.2.3.4%2Flogin.html&redirect=https%3A%2F%2Fexample.com%2F"
+    )
+    parser = mod.PortalFormParser()
+    parser.feed(
+        '<form method="post" action="https://www.google.ca">'
+        '<input name="buttonClicked" value="0" type="hidden">'
+        '<input name="redirect_url" value="" type="hidden">'
+        '<input name="err_flag" value="0" type="hidden">'
+        '<input type="button" name="Submit" value="Accepter" onclick="submitAction();">'
+        '</form>'
+    )
+    form = mod._select_portal_form(parser)
+    action = mod._portal_action_from_query(portal_url)
+    data = mod._portal_form_data(form, portal_url, portal_url)
+    test("Cisco portal action uses switch_url query value",
+         action == "http://1.2.3.4/login.html", f"action={action}")
+    test("Cisco portal sets buttonClicked to accepted value",
+         data.get("buttonClicked") == "4", f"data={data}")
+    test("Cisco portal sets redirect_url from query",
+         data.get("redirect_url") == "https://example.com/", f"data={data}")
+    test("Cisco portal does not submit input type=button name/value",
+         "Submit" not in data, f"data={data}")
+
+
 def test_search_constants():
     mod = _import_module()
     test("SEARCH_COUNT >= 20", mod.SEARCH_COUNT >= 20,
@@ -428,6 +456,7 @@ if __name__ == "__main__":
     test_captive_portal_accept_button_detection()
     test_captive_portal_form_selection()
     test_captive_portal_submit_url_uses_final_url()
+    test_cisco_captive_portal_javascript_defaults()
 
     print("\n--- Configuration ---")
     test_search_constants()

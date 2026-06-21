@@ -17,7 +17,7 @@ import tempfile
 import shutil
 import sys
 import unicodedata
-from urllib.parse import urljoin, urlparse, urlencode
+from urllib.parse import parse_qs, urljoin, urlparse, urlencode
 import random
 
 try:
@@ -562,7 +562,8 @@ class PortalFormParser(html.parser.HTMLParser):
                 if _has_accept_word(label):
                     self.has_accept_submit = True
                     self._current_form["has_accept"] = True
-                    self._current_form["accept_submit"] = field
+                    if ftype == "submit":
+                        self._current_form["accept_submit"] = field
             if field.get("name"):
                 self.fields.append(field)
                 self._current_form["fields"].append(field)
@@ -640,33 +641,35 @@ def _portal_submit_url(final_url, action=None, base_url=None):
     return urljoin(base_url or final_url, action or final_url)
 
 
-def try_auto_accept(portal_url, base_url=None):
-    log(f"Captive portal auto-accept: fetching {portal_url}")
-    jar = http.cookiejar.CookieJar()
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-    try:
-        req = urllib.request.Request(portal_url, headers=BROWSER_HEADERS)
-        with opener.open(req, timeout=10) as resp:
-            final_url = resp.url
-            html_content = resp.read().decode("utf-8", errors="replace")
-    except Exception as e:
-        log(f"Captive portal fetch failed for {portal_url}: {e}")
-        return False
+def _query_value(url, name):
+    parsed = urlparse(url)
+    values = parse_qs(parsed.query).get(name)
+    if not values:
+        return None
+    return values[0]
 
 
-    parser = PortalFormParser()
-    parser.feed(html_content)
-    form = _select_portal_form(parser)
-    if form is None:
-        log("Captive portal auto-accept: no safe accept form found")
-        return False
+def _portal_action_from_query(final_url, portal_url=None):
+    for url in (final_url, portal_url):
+        if not url:
+            continue
+        value = _query_value(url, "switch_url")
+        if value:
+            return value
+    return None
 
-    action = form.get("action") or final_url
 
-    post_url = _portal_submit_url(final_url, action, base_url)
-    if urlparse(post_url).scheme not in ("http", "https"):
-        return False
-    log(f"Captive portal auto-accept: submitting {post_url}")
+def _portal_redirect_from_query(final_url, portal_url=None):
+    for url in (final_url, portal_url):
+        if not url:
+            continue
+        value = _query_value(url, "redirect")
+        if value:
+            return value[:255]
+    return ""
+
+
+def _portal_form_data(form, final_url, portal_url=None):
     data = {}
     selected_submit = form.get("accept_submit")
     for f in form.get("fields", []):
@@ -690,6 +693,43 @@ def try_auto_accept(portal_url, base_url=None):
                 continue
             else:
                 data[name] = val if val else ""
+
+    # Cisco-style captive portals often rely on JavaScript to set these fields.
+    if "buttonClicked" in data and form.get("has_accept"):
+        data["buttonClicked"] = "4"
+    if "redirect_url" in data:
+        data["redirect_url"] = _portal_redirect_from_query(final_url, portal_url)
+    return data
+
+
+def try_auto_accept(portal_url, base_url=None):
+    log(f"Captive portal auto-accept: fetching {portal_url}")
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    try:
+        req = urllib.request.Request(portal_url, headers=BROWSER_HEADERS)
+        with opener.open(req, timeout=10) as resp:
+            final_url = resp.url
+            html_content = resp.read().decode("utf-8", errors="replace")
+    except Exception as e:
+        log(f"Captive portal fetch failed for {portal_url}: {e}")
+        return False
+
+
+    parser = PortalFormParser()
+    parser.feed(html_content)
+    form = _select_portal_form(parser)
+    if form is None:
+        log("Captive portal auto-accept: no safe accept form found")
+        return False
+
+    action = _portal_action_from_query(final_url, portal_url) or form.get("action") or final_url
+
+    post_url = _portal_submit_url(final_url, action, base_url)
+    if urlparse(post_url).scheme not in ("http", "https"):
+        return False
+    log(f"Captive portal auto-accept: submitting {post_url}")
+    data = _portal_form_data(form, final_url, portal_url)
 
     if not data and not parser.has_accept_submit:
         return False
