@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="${YTKIOSK_REPO_URL:-https://github.com/mojomast/ytkiosk.git}"
+SOURCE_URL="${YTKIOSK_SOURCE_URL:-https://github.com/mojomast/ytkiosk/archive/refs/heads/main.tar.gz}"
 
 if [[ "$(uname -s)" != "Linux" ]]; then
   echo "YTKiosk is Linux-only." >&2
@@ -16,8 +16,8 @@ python3 - <<'PY' >/dev/null 2>&1 || missing_system+=(python3-tk)
 import tkinter
 PY
 command -v mpv >/dev/null 2>&1 || missing_system+=(mpv)
-command -v git >/dev/null 2>&1 || missing_system+=(git)
 command -v curl >/dev/null 2>&1 || missing_system+=(curl)
+command -v tar >/dev/null 2>&1 || missing_system+=(tar)
 command -v xset >/dev/null 2>&1 || missing_system+=(x11-xserver-utils)
 command -v xdg-open >/dev/null 2>&1 || missing_system+=(xdg-utils)
 
@@ -35,9 +35,7 @@ fi
 
 if ! command -v deno >/dev/null 2>&1; then
   curl -fsSL https://deno.land/install.sh | sh
-  if [[ -x "$HOME/.deno/bin/deno" ]]; then
-    sudo install -m 755 "$HOME/.deno/bin/deno" /usr/local/bin/deno
-  fi
+  export PATH="$HOME/.deno/bin:$PATH"
 fi
 
 if ! command -v uv >/dev/null 2>&1; then
@@ -45,7 +43,10 @@ if ! command -v uv >/dev/null 2>&1; then
   export PATH="$HOME/.local/bin:$PATH"
 fi
 
-uv tool install --force "git+$REPO_URL"
+tmpdir="$(mktemp -d)"
+trap 'rm -rf "$tmpdir"' EXIT
+curl -fsSL "$SOURCE_URL" | tar -xz -C "$tmpdir" --strip-components=1
+uv tool install --force "$tmpdir"
 uv tool install --force yt-dlp
 
 echo

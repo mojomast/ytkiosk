@@ -19,6 +19,8 @@ system dependency installed by the distro package manager.
 The one-line installer is user-space first. It installs `uv`, YTKiosk,
 `yt-dlp`, and Deno under the current user when possible. It only uses `sudo apt`
 when required system components such as `mpv` or `python3-tk` are missing.
+It installs YTKiosk from a GitHub source tarball instead of `git+https`, so it
+does not depend on Git or Git's HTTPS remote helper.
 
 ## Dependency Decisions
 

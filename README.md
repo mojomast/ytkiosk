@@ -98,7 +98,7 @@ One-line install for Debian, Ubuntu, and Linux Mint:
 curl -fsSL https://raw.githubusercontent.com/mojomast/ytkiosk/main/install.sh | bash
 ```
 
-The installer is user-space first: it installs `uv`, YTKiosk, `yt-dlp`, and Deno under your account when possible. It only asks for `sudo` if required system components such as `mpv` or `python3-tk` are missing, because those cannot be reliably installed inside a Python venv.
+The installer is user-space first: it installs `uv`, YTKiosk, `yt-dlp`, and Deno under your account when possible. It downloads YTKiosk as a source tarball, so it does not require Git. It only asks for `sudo` if required system components such as `mpv` or `python3-tk` are missing, because those cannot be reliably installed inside a Python venv.
 
 Manual install:
 
