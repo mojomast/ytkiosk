@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=Simple Video Player
 Comment=Watch YouTube videos by keyword
-Exec=/usr/bin/python3 /home/baloney/yt/simple-video-player.py
+Exec=ytkiosk
 Terminal=false
 Type=Application
 Categories=AudioVideo;Player;

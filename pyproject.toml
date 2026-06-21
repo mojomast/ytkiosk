@@ -1,0 +1,97 @@
+[build-system]
+requires = ["hatchling >= 1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ytkiosk"
+version = "0.1.0"
+description = "Fullscreen YouTube kiosk player for care settings and older Linux computers"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE*"]
+authors = [
+  { name = "mojomast" }
+]
+keywords = [
+  "youtube",
+  "kiosk",
+  "mpv",
+  "tkinter",
+  "care",
+  "accessibility",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: X11 Applications",
+  "Intended Audience :: End Users/Desktop",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Multimedia :: Video",
+]
+dependencies = [
+  "yt-dlp >= 2026.6.9",
+]
+
+[project.urls]
+Homepage = "https://github.com/mojomast/ytkiosk"
+Repository = "https://github.com/mojomast/ytkiosk"
+Issues = "https://github.com/mojomast/ytkiosk/issues"
+
+[project.scripts]
+ytkiosk = "ytkiosk.legacy:main"
+ytkiosk-doctor = "ytkiosk.doctor:main"
+ytkiosk-cli = "ytkiosk.cli:main"
+
+[dependency-groups]
+dev = [
+  "build >= 1.2",
+  "ruff >= 0.11",
+  "twine >= 6.0",
+  { include-group = "test" },
+]
+test = [
+  "pytest >= 8.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ytkiosk"]
+artifacts = [
+  "src/ytkiosk/bin/**",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/ytkiosk",
+  "docs",
+  "vendor",
+  "README.md",
+  "HANDOFF.md",
+  "LICENSE*",
+  "THIRD_PARTY_LICENSES.md",
+  "pyproject.toml",
+  "yt-player.desktop",
+  "simple-video-player.py",
+  "test_app.py",
+  "test_integration.py",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+src = ["src"]
+exclude = ["src/ytkiosk/legacy.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = []
+
+[tool.pytest.ini_options]
+python_files = ["test_*.py"]
+markers = [
+  "ui: tests requiring a graphical display",
+]

@@ -22,8 +22,8 @@ Hospital-grade kiosk YouTube player for Linux Mint. Designed for elderly patient
 | Python | 3.12.3 | apt (python3) | `/usr/bin/python3` |
 | tkinter | 8.6 | apt (python3-tk) | — |
 | mpv | 0.37+ | apt or configured path | auto-detected with fallback `/usr/bin/mpv` |
-| yt-dlp | 2026.06.09 | **GitHub release** preferred | auto-detected with fallback `/usr/local/bin/yt-dlp` |
-| deno | latest | GitHub install script | `/usr/local/bin/deno` |
+| yt-dlp | 2026.06.09+ | Python package for new installs; GitHub binary for legacy direct script use | package dependency / fallback `/usr/local/bin/yt-dlp` |
+| deno | 2.3.0+ | GitHub install script or future bundled sidecar | `YTKIOSK_DENO`, package sidecar, PATH, or `/usr/local/bin/deno` |
 
 ### Critical: yt-dlp must be the latest GitHub release
 The apt version (`/usr/bin/yt-dlp`) is too old — YouTube's JS changes can break its `n`-signature extraction, causing HTTP 403 on all URLs. Remove the apt package and use the standalone binary from GitHub at `/usr/local/bin/yt-dlp`:
@@ -41,15 +41,46 @@ sudo install -m 755 "$HOME/.deno/bin/deno" /usr/local/bin/deno
 ```
 Install Deno into `/usr/local/bin` so subprocesses launched by the app and yt-dlp can find it reliably.
 
+## Packaging Direction
+
+The project is intentionally Linux-only. Windows support is out of scope because
+the deployment goal is to reuse older hardware that cannot run Windows 11 well.
+
+The GUI implementation now lives in `src/ytkiosk/legacy.py`. The root
+`simple-video-player.py` file is a compatibility launcher for existing scripts,
+desktop shortcuts, and tests.
+
+```bash
+uv pip install -e .
+ytkiosk
+ytkiosk-doctor
+ytkiosk-cli doctor
+```
+
+Bundling policy:
+
+- Bundle/manage Python dependencies, including `yt-dlp`.
+- Bundle Deno as a Linux sidecar in future release artifacts when needed.
+- Do **not** bundle `mpv`; install it via the distro package manager.
+- Treat `xset`, `xdg-open`, and `pactl` as optional system helpers.
+
+See `docs/DEPENDENCIES.md`, `docs/RELEASE.md`, and
+`THIRD_PARTY_LICENSES.md` before publishing binary bundles.
+
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `simple-video-player.py` | Main app |
+| `simple-video-player.py` | Compatibility launcher for the packaged legacy app |
 | `test_app.py` | App/unit-style tests |
 | `test_integration.py` | 6 integration tests |
 | `yt-player.desktop` | Desktop shortcut |
 | `HANDOFF.md` | This file |
+| `pyproject.toml` | Python packaging metadata and helper command entry points |
+| `src/ytkiosk/legacy.py` | Current GUI/playback implementation, moved from the monolith |
+| `src/ytkiosk/` | Incremental package modules and helper commands |
+| `docs/DEPENDENCIES.md` | Linux-only dependency and bundling policy |
+| `docs/RELEASE.md` | Future release bundle checklist |
 
 ## Architecture
 

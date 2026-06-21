@@ -66,12 +66,12 @@ User clicks keyword
 - **RAM:** 2–4 GB minimum
 - **Python:** 3.12+ with tkinter (`python3-tk`)
 - **mpv:** 0.37+ from apt is fine
-- **yt-dlp:** Latest GitHub release at `/usr/local/bin/yt-dlp` (do not use apt)
-- **Deno:** Required by current yt-dlp for YouTube JS signature extraction
+- **yt-dlp:** Managed by the Python package in new installs; avoid stale distro packages
+- **Deno:** Required by current yt-dlp for YouTube JS signature extraction; can be installed system-wide or bundled as a sidecar in future release artifacts
 
-### Install yt-dlp (Critical)
+### Install yt-dlp For Legacy Script Use
 
-The apt version of yt-dlp is outdated and can fail with HTTP 403 errors. Always remove the apt package and use the latest GitHub release:
+The apt version of yt-dlp is often outdated and can fail with HTTP 403 errors. The package migration is moving toward the PyPI `yt-dlp` dependency. If you run only the legacy script directly, use the latest GitHub release instead of apt:
 
 ```bash
 sudo apt remove -y yt-dlp || true
@@ -105,11 +105,31 @@ sudo wget -q https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
 curl -fsSL https://deno.land/install.sh | sh
 sudo install -m 755 "$HOME/.deno/bin/deno" /usr/local/bin/deno
 
-# Clone and run
+# Clone and run the compatibility launcher
 git clone https://github.com/mojomast/ytkiosk.git
 cd ytkiosk
 python3 simple-video-player.py
 ```
+
+### Developer Package Install
+
+The GUI implementation now lives in `src/ytkiosk/legacy.py` while the root
+`simple-video-player.py` file remains as a compatibility launcher. The package
+also provides helper commands and dependency checks:
+
+```bash
+uv pip install -e .
+ytkiosk          # launch GUI
+ytkiosk-doctor
+ytkiosk-cli doctor
+```
+
+`ytkiosk-doctor` checks Linux platform support, Python, tkinter, `mpv`, the
+Python `yt_dlp` package, Deno discovery, optional desktop tools, display state,
+and writable config/runtime directories. It does not launch the GUI.
+
+See `docs/DEPENDENCIES.md` for the Linux-only dependency strategy and
+`docs/RELEASE.md` for the future bundle plan.
 
 ---
 
@@ -124,11 +144,11 @@ cp yt-player.desktop ~/.config/autostart/
 
 ### Customizing Keywords
 
-Use the ✎ button inside the app to edit keywords, or click **+ Ajouter un mot-clé** to add new ones. Keywords save automatically. You can also edit `INITIAL_KEYWORDS` in `simple-video-player.py` to set the defaults for a fresh install.
+Use the ✎ button inside the app to edit keywords, or click **+ Ajouter un mot-clé** to add new ones. Keywords save automatically. You can also edit `INITIAL_KEYWORDS` in `src/ytkiosk/legacy.py` to set the defaults for a fresh install.
 
 ### Translation
 
-All UI strings live in the `FR` dictionary at the top of `simple-video-player.py`. Replace the values to translate to any language.
+All UI strings live in the language dictionaries near the top of `src/ytkiosk/legacy.py`. Replace the values to translate to any language.
 
 ---
 
@@ -141,6 +161,10 @@ All UI strings live in the `FR` dictionary at the top of `simple-video-player.py
 | `MIN_DURATION` | 300 | Minimum video length in seconds (5 min) |
 | `CONFIG_DIR` | `~/.config/yt-player` | Where keywords and state are saved |
 | `RUNTIME_DIR` | `$XDG_RUNTIME_DIR/yt-player-$UID` or `/tmp/yt-player-$UID` | Private runtime directory for logs and mpv IPC socket |
+
+`mpv` is intentionally not bundled. Future Linux release bundles may include
+the Python app, Python dependencies, and Deno, while continuing to use distro
+`mpv` for playback.
 
 ---
 
