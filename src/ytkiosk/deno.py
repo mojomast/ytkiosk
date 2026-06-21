@@ -4,8 +4,19 @@ import os
 import shutil
 import sys
 from contextlib import suppress
+from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
+
+
+@dataclass(frozen=True)
+class JsRuntime:
+    name: str
+    path: Path
+
+    @property
+    def yt_dlp_value(self) -> str:
+        return f"{self.name}:{self.path}"
 
 
 def bundled_deno_path() -> Path | None:
@@ -50,9 +61,39 @@ def resolve_deno(configured_path: str | None = None) -> Path | None:
     return None
 
 
-def yt_dlp_js_runtime_arg(deno_path: Path | None = None) -> list[str]:
-    """Return yt-dlp CLI args that force the resolved Deno runtime, if present."""
-    resolved = deno_path or resolve_deno()
+def _resolve_named_runtime(name: str, commands: tuple[str, ...]) -> JsRuntime | None:
+    for command in commands:
+        value = shutil.which(command)
+        if value is None:
+            continue
+        path = Path(value)
+        if path.is_file() and os.access(path, os.X_OK):
+            return JsRuntime(name, path)
+    return None
+
+
+def resolve_js_runtime(configured_deno_path: str | None = None) -> JsRuntime | None:
+    """Resolve a yt-dlp JavaScript runtime without making one mandatory."""
+    deno = resolve_deno(configured_deno_path)
+    if deno is not None:
+        return JsRuntime("deno", deno)
+
+    for name, commands in (
+        ("node", ("node", "nodejs")),
+        ("quickjs", ("qjs", "quickjs", "qjs-ng")),
+        ("bun", ("bun",)),
+    ):
+        runtime = _resolve_named_runtime(name, commands)
+        if runtime is not None:
+            return runtime
+    return None
+
+
+def yt_dlp_js_runtime_arg(runtime: JsRuntime | Path | None = None) -> list[str]:
+    """Return yt-dlp CLI args that force the resolved JS runtime, if present."""
+    if isinstance(runtime, Path):
+        runtime = JsRuntime("deno", runtime)
+    resolved = runtime or resolve_js_runtime()
     if resolved is None:
         return []
-    return ["--js-runtimes", f"deno:{resolved}"]
+    return ["--js-runtimes", resolved.yt_dlp_value]

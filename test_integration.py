@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import tkinter as tk
 import importlib.util
+import time
 
 APP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "simple-video-player.py")
 
@@ -13,6 +14,13 @@ spec = importlib.util.spec_from_file_location("svp", APP_PATH)
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 SimpleVideoPlayer = mod.SimpleVideoPlayer
+
+
+def stub_playback(app):
+    def fake_play_keyword(keyword, session_id):
+        time.sleep(1)
+
+    app._play_keyword = fake_play_keyword
 
 
 def find_keyword_buttons(widget):
@@ -67,8 +75,8 @@ def test_button_command_bound():
 
     import threading
     before = threading.active_count()
+    stub_playback(app)
     app._on_keyword_click(expected[0])
-    import time
     time.sleep(0.3)
     after = threading.active_count()
 
@@ -99,9 +107,9 @@ def test_button_click_simulation():
 
     keyword = mod.INITIAL_KEYWORDS[0]
     try:
+        stub_playback(app)
         app._on_keyword_click(keyword)
         print("_on_keyword_click returned")
-        import time
         time.sleep(0.5)
         current = threading.active_count()
         print(f"Threads after click: {current}")

@@ -26,16 +26,17 @@ def test(name, condition, detail=""):
 
 
 def test_ytdlp_installed():
+    mod = _import_module()
     try:
         r = subprocess.run(
-            ["/usr/local/bin/yt-dlp", "--version"],
+            [mod.YTDLP, "--version"],
             capture_output=True, text=True, timeout=10,
         )
         test("yt-dlp is installed and recent",
              r.returncode == 0 and r.stdout.strip() >= "2026",
              f"rc={r.returncode} version={r.stdout.strip()}")
     except FileNotFoundError:
-        test("yt-dlp binary at /usr/local/bin/yt-dlp", False)
+        test("yt-dlp binary is resolvable", False, f"path={mod.YTDLP}")
 
 
 def test_mpv_available():
@@ -62,21 +63,16 @@ def test_url_building():
 
 
 def test_mpv_command_format():
+    mod = _import_module()
     urls = ["https://www.youtube.com/watch?v=abc123"]
-    cmd = [
-        "mpv", "--osd-level=0",
-        "--wid=<id>",
-        "--no-config",
-        "--input-ipc-server=<runtime>/mpv-socket",
-        "--keep-open=no",
-        "--vo=gpu",
-        "--hwdec=auto",
-        "--gpu-context=x11egl",
-        "--ao=pulse",
-        "--profile=fast",
-        "--x11-bypass-compositor=yes",
-        "--ytdl-format=bv[height<=720]+ba/b[height<=720]",
-    ] + urls
+    cmd = mod._build_mpv_command(
+        urls,
+        display_mode="embedded-x11",
+        socket_path="<runtime>/mpv-socket",
+        window_id="<id>",
+        audio_backend="pulse",
+        ytdlp_path="/venv/bin/yt-dlp",
+    )
     required = [
         "--osd-level=0", "--no-config",
         "--input-ipc-server=<runtime>/mpv-socket",
@@ -86,6 +82,7 @@ def test_mpv_command_format():
         "--profile=fast",
         "--x11-bypass-compositor=yes",
         "--ytdl-format=bv[height<=720]+ba/b[height<=720]",
+        "--script-opts=ytdl_hook-ytdl_path=/venv/bin/yt-dlp",
     ]
     test("mpv command has all required args",
          all(a in cmd for a in required), f"cmd={cmd}")
@@ -102,6 +99,41 @@ def test_mpv_command_format():
          not any(a.startswith("--autofit") for a in cmd),
          "autofit should not be used with embedded mpv")
 
+    fallback_cmd = mod._build_mpv_command(
+        urls,
+        display_mode="standalone",
+        socket_path="<runtime>/mpv-socket",
+        audio_backend="pulse",
+        ytdlp_path="/venv/bin/yt-dlp",
+    )
+    test("standalone mpv fallback omits --wid",
+         not any(a.startswith("--wid=") for a in fallback_cmd),
+         f"cmd={fallback_cmd}")
+    test("standalone mpv fallback uses fullscreen flags",
+         all(a in fallback_cmd for a in ("--fs", "--ontop", "--no-border")),
+         f"cmd={fallback_cmd}")
+    test("standalone mpv fallback omits X11-only flags",
+         "--gpu-context=x11egl" not in fallback_cmd and
+         "--x11-bypass-compositor=yes" not in fallback_cmd,
+         f"cmd={fallback_cmd}")
+
+
+def test_display_mode_detection():
+    mod = _import_module()
+    x11 = mod._detect_mpv_display_mode(
+        environ={"DISPLAY": ":0", "XDG_SESSION_TYPE": "x11"},
+        tk_windowing_system="x11",
+    )
+    test("X11 Tk session uses embedded mpv",
+         x11["mode"] == "embedded-x11", f"got {x11}")
+
+    wayland = mod._detect_mpv_display_mode(
+        environ={"WAYLAND_DISPLAY": "wayland-0", "XDG_SESSION_TYPE": "wayland"},
+        tk_windowing_system="wayland",
+    )
+    test("Native Wayland session uses standalone mpv fallback",
+         wayland["mode"] == "standalone", f"got {wayland}")
+
 
 def test_app_script_syntax():
     try:
@@ -111,7 +143,16 @@ def test_app_script_syntax():
         test("App script has valid syntax", False, str(e))
 
 
-def _import_module(name="svp"):
+def _clear_legacy_module():
+    sys.modules.pop("ytkiosk.legacy", None)
+    pkg = sys.modules.get("ytkiosk")
+    if pkg is not None and hasattr(pkg, "legacy"):
+        delattr(pkg, "legacy")
+
+
+def _import_module(name="svp", fresh_legacy=False):
+    if fresh_legacy:
+        _clear_legacy_module()
     spec = importlib.util.spec_from_file_location(name, APP_PATH)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -126,7 +167,7 @@ def _import_module_with_env(name, env):
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
-        return _import_module(name)
+        return _import_module(name, fresh_legacy=True)
     finally:
         for k, v in old_env.items():
             if v is None:
@@ -235,6 +276,7 @@ def test_load_config_missing_defaults():
 
 
 def test_ytdlp_search():
+    mod = _import_module()
     keywords = [
         "Voitures classiques",
         "Compilations d'animaux",
@@ -244,7 +286,7 @@ def test_ytdlp_search():
     for kw in keywords:
         try:
             r = subprocess.run(
-                ["/usr/local/bin/yt-dlp", f"ytsearch5:{kw}",
+                [mod.YTDLP, *mod.yt_dlp_js_runtime_arg(), f"ytsearch5:{kw}",
                  "--flat-playlist", "--print", "%(id)s"],
                 capture_output=True, text=True, timeout=30,
             )
@@ -256,9 +298,11 @@ def test_ytdlp_search():
 
 
 def test_ytdlp_search_with_duration():
+    mod = _import_module()
     try:
         r = subprocess.run(
-            ["/usr/local/bin/yt-dlp",
+            [mod.YTDLP,
+             *mod.yt_dlp_js_runtime_arg(),
              "ytsearch5:Compilations d'animaux",
              "--flat-playlist", "--ignore-errors",
              "--match-filters", "duration > 60",
@@ -325,6 +369,7 @@ if __name__ == "__main__":
     print("\n--- Core Logic ---")
     test_url_building()
     test_mpv_command_format()
+    test_display_mode_detection()
     test_app_script_syntax()
     test_french_keywords()
     test_french_strings()

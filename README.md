@@ -52,9 +52,10 @@ User clicks keyword
   ├─► Sort by duration → keep longest 20 → shuffle randomly
   │
   ├─► Switch to video mode:
-  │     Show video frame → get X11 window ID → mpv --wid={ID}
+  │     X11/XWayland: show video frame → get X11 window ID → mpv --wid={ID}
+  │     Native Wayland: launch standalone fullscreen mpv fallback
   │
-  └─► mpv plays embedded in the tkinter window
+  └─► mpv plays embedded when X11/XWayland is available
         Controls via IPC Unix socket in a private per-user runtime directory
 ```
 
@@ -64,14 +65,15 @@ User clicks keyword
 
 - **OS:** Linux (tested on Linux Mint 22.3 XFCE, X11)
 - **RAM:** 2–4 GB minimum
-- **Python:** 3.12+ with tkinter (`python3-tk`)
+- **Python:** 3.11+ with tkinter (`python3-tk`)
 - **mpv:** 0.37+ from apt is fine
-- **yt-dlp:** Managed by the Python package in new installs; avoid stale distro packages
-- **Deno:** Required by current yt-dlp for YouTube JS signature extraction; can be installed system-wide or bundled as a sidecar in future release artifacts
+- **yt-dlp:** Managed by the Python package in new installs with default extractor support; avoid stale distro packages
+- **JavaScript runtime:** Optional but recommended for full YouTube extraction support. Deno is preferred when present; Node 22+ and QuickJS are also supported by yt-dlp.
+- **Window system:** X11/Xorg is recommended for embedded playback. Native Wayland sessions use standalone fullscreen mpv fallback because `mpv --wid` is X11/XWayland-oriented.
 
 ### Install yt-dlp For Legacy Script Use
 
-The apt version of yt-dlp is often outdated and can fail with HTTP 403 errors. The package migration is moving toward the PyPI `yt-dlp` dependency. If you run only the legacy script directly, use the latest GitHub release instead of apt:
+The apt version of yt-dlp is often outdated and can fail with HTTP 403 errors. Package installs use the PyPI `yt-dlp[default]` dependency inside the YTKiosk venv. If you run only the legacy script directly without installing the package, use a current upstream yt-dlp binary instead of apt:
 
 ```bash
 sudo apt remove -y yt-dlp || true
@@ -80,12 +82,13 @@ sudo wget -q https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
 /usr/local/bin/yt-dlp --version
 ```
 
-### Install Deno (required by yt-dlp for JS signature extraction)
+### Optional JavaScript Runtime
+
+New package installs include `yt-dlp[default]`, which provides yt-dlp's default extractor support. A local JavaScript runtime is still recommended for the most reliable YouTube signature extraction. Deno is the preferred low-maintenance choice; Node 22+ or QuickJS can also work.
 
 ```bash
 curl -fsSL https://deno.land/install.sh | sh
-sudo install -m 755 "$HOME/.deno/bin/deno" /usr/local/bin/deno
-/usr/local/bin/deno --version
+~/.deno/bin/deno --version
 ```
 
 ---
@@ -95,10 +98,18 @@ sudo install -m 755 "$HOME/.deno/bin/deno" /usr/local/bin/deno
 One-line install for Debian, Ubuntu, and Linux Mint:
 
 ```bash
-curl -fsSL 'https://raw.githubusercontent.com/mojomast/ytkiosk/main/install.sh?v=2026-06-21.2' | bash
+curl -fsSL 'https://raw.githubusercontent.com/mojomast/ytkiosk/main/install.sh?v=2026-06-21.3' | bash
 ```
 
-The installer is user-space first: it installs `uv`, creates a dedicated venv in `~/.local/share/ytkiosk/venv`, installs YTKiosk and `yt-dlp` there, writes wrappers to `~/.local/bin`, and installs Deno under your account when possible. It downloads YTKiosk as a source tarball, so it does not require Git. It only asks for `sudo` if required system components such as `mpv` or `python3-tk` are missing, because those cannot be reliably installed inside a Python venv.
+The installer is user-space first: it installs `uv`, creates a dedicated venv in `~/.local/share/ytkiosk/venv`, installs YTKiosk and `yt-dlp[default]` there, and writes wrappers to `~/.local/bin`. It downloads YTKiosk as a source tarball, so it does not require Git. It only asks for `sudo` if required system components such as `mpv` or `python3-tk` are missing, because those cannot be reliably installed inside a Python venv. Optional helpers such as `xset`, `xdg-open`, `pactl`, and a JavaScript runtime are reported by `ytkiosk-doctor` but do not block install.
+
+To also install Deno during the one-line install:
+
+```bash
+curl -fsSL 'https://raw.githubusercontent.com/mojomast/ytkiosk/main/install.sh?v=2026-06-21.3' | YTKIOSK_INSTALL_DENO=1 bash
+```
+
+For a more auditable install, download `install.sh`, inspect it, then run it locally instead of piping directly to `bash`.
 
 Manual install:
 
@@ -106,19 +117,13 @@ Manual install:
 # System dependencies
 sudo apt install python3 python3-tk mpv
 
-# Latest yt-dlp, not the apt package
-sudo apt remove -y yt-dlp || true
-sudo wget -q https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
-  -O /usr/local/bin/yt-dlp && sudo chmod +x /usr/local/bin/yt-dlp
-
-# Deno, available to subprocesses launched by the app
-curl -fsSL https://deno.land/install.sh | sh
-sudo install -m 755 "$HOME/.deno/bin/deno" /usr/local/bin/deno
-
-# Clone and run the compatibility launcher
+# Clone and install the package
 git clone https://github.com/mojomast/ytkiosk.git
 cd ytkiosk
-python3 simple-video-player.py
+uv venv --python python3 .venv
+uv pip install --python .venv/bin/python -e .
+.venv/bin/ytkiosk-doctor
+.venv/bin/ytkiosk
 ```
 
 ### Developer Package Install
@@ -135,8 +140,30 @@ ytkiosk-cli doctor
 ```
 
 `ytkiosk-doctor` checks Linux platform support, Python, tkinter, `mpv`, the
-Python `yt_dlp` package, Deno discovery, optional desktop tools, display state,
-and writable config/runtime directories. It does not launch the GUI.
+Python `yt_dlp` package, JavaScript runtime discovery, optional desktop tools,
+X11/Wayland display state, and writable config/runtime directories. It prints
+`OK`, `WARN`, or `FAIL`; warnings do not make the command fail. It does not
+launch the GUI.
+
+### Update And Uninstall
+
+To update a one-line install, rerun the installer. It recreates the venv and
+refreshes YTKiosk-managed wrappers while preserving `~/.config/yt-player`.
+
+To uninstall the app files:
+
+```bash
+rm -f ~/.local/bin/ytkiosk ~/.local/bin/ytkiosk-doctor ~/.local/bin/ytkiosk-cli ~/.local/bin/ytkiosk-yt-dlp
+rm -rf ~/.local/share/ytkiosk
+```
+
+Remove `~/.local/bin/yt-dlp` only if it contains `YTKiosk managed yt-dlp wrapper`; otherwise it may be a user-managed yt-dlp install.
+
+Only remove saved keywords/state if you no longer need them:
+
+```bash
+rm -rf ~/.config/yt-player
+```
 
 See `docs/DEPENDENCIES.md` for the Linux-only dependency strategy and
 `docs/RELEASE.md` for the future bundle plan.
@@ -150,6 +177,8 @@ See `docs/DEPENDENCIES.md` for the Linux-only dependency strategy and
 ```bash
 mkdir -p ~/.config/autostart
 cp yt-player.desktop ~/.config/autostart/
+# If autostart cannot find ytkiosk, edit the desktop file to use:
+# Exec=$HOME/.local/bin/ytkiosk
 ```
 
 ### Customizing Keywords
@@ -173,8 +202,8 @@ All UI strings live in the language dictionaries near the top of `src/ytkiosk/le
 | `RUNTIME_DIR` | `$XDG_RUNTIME_DIR/yt-player-$UID` or `/tmp/yt-player-$UID` | Private runtime directory for logs and mpv IPC socket |
 
 `mpv` is intentionally not bundled. Future Linux release bundles may include
-the Python app, Python dependencies, and Deno, while continuing to use distro
-`mpv` for playback.
+the Python app, Python dependencies, and an optional JavaScript runtime sidecar,
+while continuing to use distro `mpv` for playback.
 
 ---
 
@@ -182,11 +211,11 @@ the Python app, Python dependencies, and Deno, while continuing to use distro
 
 | Component | Role |
 |---|---|
-| Python 3.12 + tkinter | UI |
-| mpv | Video playback (embedded via X11 `--wid`) |
+| Python 3.11+ + tkinter | UI |
+| mpv | Video playback (embedded via X11/XWayland `--wid`, standalone fallback on native Wayland) |
 | yt-dlp | YouTube search and metadata |
-| Deno | JS runtime for yt-dlp signature extraction |
-| X11 (Xorg) | Window system |
+| Deno / Node / QuickJS | Optional JS runtime for yt-dlp signature extraction |
+| X11 (Xorg) | Recommended window system for embedded playback |
 
 ---
 
@@ -220,7 +249,7 @@ xvfb-run -a python3 test_integration.py
 
 ## Known Limitations
 
-- mpv embedding is X11-oriented (`--wid`, `--gpu-context=x11egl`) and may need display/GPU flag changes on Wayland or unusual drivers
+- Native Wayland embedding is not supported by the current Tk + `mpv --wid` architecture. X11/Xorg or XWayland gives embedded playback; native Wayland falls back to standalone fullscreen mpv.
 - Captive portal auto-accept works for simple "click agree" portals only
 - Audio backend is detected at playback start; hot-plugged audio devices may require restarting playback
 

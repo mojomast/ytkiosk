@@ -9,8 +9,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="ytkiosk",
         description=(
-            "YTKiosk helper commands. "
-            "The GUI app still runs via simple-video-player.py."
+            "YTKiosk helper commands. Use `ytkiosk` for the GUI entry point "
+            "or `ytkiosk-cli run` from this helper."
         ),
     )
     subparsers = parser.add_subparsers(dest="command")

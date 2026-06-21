@@ -15,8 +15,14 @@ import urllib.error
 import html.parser
 import tempfile
 import shutil
+import sys
 from urllib.parse import urljoin, urlparse, urlencode
 import random
+
+try:
+    from ytkiosk.deno import resolve_js_runtime, yt_dlp_js_runtime_arg
+except ModuleNotFoundError:
+    from deno import resolve_js_runtime, yt_dlp_js_runtime_arg
 
 CONFIG_DIR = os.path.expanduser("~/.config/yt-player")
 RUNTIME_DIR = os.path.join(
@@ -55,15 +61,26 @@ MPV_SOCKET = os.path.join(RUNTIME_DIR, "mpv-socket")
 MPV_LOG_FILE = os.path.join(RUNTIME_DIR, "mpv-embed.log")
 
 
-def _cfg_path(name, fallback_name, default):
+def _venv_script(name):
+    candidate = os.path.join(os.path.dirname(sys.executable), name)
+    if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+        return candidate
+    return None
+
+
+def _cfg_path(name, fallback_name, default, prefer_venv=False):
     value = _cfg.get(name)
     if isinstance(value, str) and value.strip():
         return value.strip()
+    if prefer_venv:
+        venv_script = _venv_script(fallback_name)
+        if venv_script:
+            return venv_script
     return shutil.which(fallback_name) or default
 
 
 MPV = _cfg_path("mpv_path", "mpv", "/usr/bin/mpv")
-YTDLP = _cfg_path("ytdlp_path", "yt-dlp", "/usr/local/bin/yt-dlp")
+YTDLP = _cfg_path("ytdlp_path", "yt-dlp", "/usr/local/bin/yt-dlp", prefer_venv=True)
 
 
 def _cfg_int(name, default, minimum):
@@ -92,6 +109,75 @@ def _detect_audio_backend():
     except Exception:
         pass
     return "alsa"
+
+
+def _detect_mpv_display_mode(root=None, environ=None, tk_windowing_system=None):
+    env = os.environ if environ is None else environ
+    display = env.get("DISPLAY")
+    wayland_display = env.get("WAYLAND_DISPLAY")
+    session_type = (env.get("XDG_SESSION_TYPE") or "unknown").lower()
+
+    if tk_windowing_system is None and root is not None:
+        try:
+            tk_windowing_system = str(root.tk.call("tk", "windowingsystem")).lower()
+        except tk.TclError:
+            tk_windowing_system = "unknown"
+    tk_windowing_system = (tk_windowing_system or "unknown").lower()
+
+    embedded = tk_windowing_system == "x11" and bool(display)
+    return {
+        "mode": "embedded-x11" if embedded else "standalone",
+        "display": display,
+        "wayland_display": wayland_display,
+        "session_type": session_type,
+        "tk_windowing_system": tk_windowing_system,
+    }
+
+
+def _build_mpv_command(
+    urls,
+    *,
+    display_mode,
+    socket_path=MPV_SOCKET,
+    window_id=None,
+    audio_backend=None,
+    ytdlp_path=YTDLP,
+    js_runtime=None,
+):
+    cmd = [MPV, "--osd-level=0"]
+    if display_mode == "embedded-x11":
+        if window_id is None:
+            raise ValueError("embedded mpv mode requires a window id")
+        cmd.append(f"--wid={window_id}")
+
+    cmd += [
+        "--no-config",
+        f"--input-ipc-server={socket_path}",
+        "--keep-open=no",
+        "--vo=gpu",
+        "--hwdec=auto",
+        f"--ao={audio_backend or _detect_audio_backend()}",
+        "--profile=fast",
+    ]
+
+    if display_mode == "embedded-x11":
+        cmd += [
+            "--gpu-context=x11egl",
+            "--x11-bypass-compositor=yes",
+        ]
+    else:
+        cmd += [
+            "--fs",
+            "--ontop",
+            "--no-border",
+        ]
+
+    cmd.append("--ytdl-format=bv[height<=720]+ba/b[height<=720]")
+    if ytdlp_path:
+        cmd.append(f"--script-opts=ytdl_hook-ytdl_path={ytdlp_path}")
+    if js_runtime is not None:
+        cmd.append(f"--ytdl-raw-options=js-runtimes={js_runtime.yt_dlp_value}")
+    return cmd + list(urls)
 
 
 def log(msg):
@@ -138,6 +224,7 @@ STRINGS_FR = {
     "connectivity_check": "Vérification de la connexion...",
     "retry": "Réessayer",
     "cancel": "Annuler",
+    "standalone_mpv": "Session non-X11 détectée : lecture mpv plein écran séparée.",
     "help": "Aide",
     "help_title": "Aide - Lecteur Vidéo Simple",
     "help_text": (
@@ -202,6 +289,7 @@ STRINGS_EN = {
     "connectivity_check": "Checking connection...",
     "retry": "Retry",
     "cancel": "Cancel",
+    "standalone_mpv": "Non-X11 session detected: using standalone fullscreen mpv.",
     "help": "Help",
     "help_title": "Help - Simple Video Player",
     "help_text": (
@@ -1049,20 +1137,23 @@ class SimpleVideoPlayer:
 
     def _fetch_playlist(self, keyword):
         log(FR["fetching"].format(keyword))
+        js_runtime_args = yt_dlp_js_runtime_arg()
 
         try:
+            cmd = [
+                YTDLP,
+                *js_runtime_args,
+                f"ytsearch{SEARCH_COUNT}:{keyword}",
+                "--flat-playlist",
+                "--ignore-errors",
+                "--match-filters", f"duration > {MIN_DURATION} & !is_live",
+                "--retries", "5",
+                "--fragment-retries", "5",
+                "--socket-timeout", "15",
+                "--print", "%(id)s\t%(duration)s",
+            ]
             result = subprocess.run(
-                [
-                    YTDLP,
-                    f"ytsearch{SEARCH_COUNT}:{keyword}",
-                    "--flat-playlist",
-                    "--ignore-errors",
-                    "--match-filters", f"duration > {MIN_DURATION} & !is_live",
-                    "--retries", "5",
-                    "--fragment-retries", "5",
-                    "--socket-timeout", "15",
-                    "--print", "%(id)s\t%(duration)s",
-                ],
+                cmd,
                 capture_output=True, text=True, timeout=60,
             )
         except subprocess.TimeoutExpired:
@@ -1106,27 +1197,35 @@ class SimpleVideoPlayer:
             return
         self._show_video_view()
         fw, fh = self._ensure_video_frame_sized()
-        wid = self.video_frame.winfo_id()
-        log(f"Video frame X11 ID: {wid} size={fw}x{fh}")
+        display_info = _detect_mpv_display_mode(self.root)
+        display_mode = display_info["mode"]
+        wid = None
+        if display_mode == "embedded-x11":
+            wid = self.video_frame.winfo_id()
+            log(f"Video frame X11 ID: {wid} size={fw}x{fh}")
+        else:
+            self.status_label.config(text=FR["standalone_mpv"])
+            log(f"Using standalone mpv fallback: {display_info}")
 
         env = os.environ.copy()
-        env["PATH"] = f"/usr/local/bin:{env.get('PATH', '/usr/bin')}"
+        env["PATH"] = ":".join(
+            part for part in (
+                os.path.dirname(YTDLP),
+                "/usr/local/bin",
+                env.get("PATH", "/usr/bin"),
+            ) if part
+        )
+        if display_mode == "embedded-x11":
+            env.pop("WAYLAND_DISPLAY", None)
 
-        cmd = [
-            MPV, "--osd-level=0",
-            f"--wid={wid}",
-            "--no-config",
-            f"--input-ipc-server={MPV_SOCKET}",
-            "--keep-open=no",
-            # Fallback for Wayland/no-GPU edge cases: replace with "--vo=x11".
-            "--vo=gpu",
-            "--hwdec=auto",
-            "--gpu-context=x11egl",
-            f"--ao={_detect_audio_backend()}",
-            "--profile=fast",
-            "--x11-bypass-compositor=yes",
-            "--ytdl-format=bv[height<=720]+ba/b[height<=720]",
-        ] + urls
+        cmd = _build_mpv_command(
+            urls,
+            display_mode=display_mode,
+            window_id=wid,
+            audio_backend=_detect_audio_backend(),
+            ytdlp_path=YTDLP,
+            js_runtime=resolve_js_runtime(),
+        )
 
         try:
             os.unlink(MPV_SOCKET)

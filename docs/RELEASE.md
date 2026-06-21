@@ -7,8 +7,8 @@ is a compatibility launcher. Future release bundles should follow this order:
 2. Run `python3 test_app.py` and `xvfb-run -a python3 test_integration.py`.
 3. Run `ytkiosk-doctor` on the target distro image.
 4. Assemble a Linux `onedir` or AppImage bundle that excludes `mpv`.
-5. If Deno is included, copy the pinned Linux x86_64 `deno` binary to
-   `ytkiosk/bin/deno` in the artifact.
+5. If a JavaScript runtime sidecar is included, prefer a pinned Linux x86_64
+   Deno binary at `ytkiosk/bin/deno` in the artifact.
 6. Record binary versions, download URLs, checksums, and licenses.
 7. Generate or update an SBOM before publishing.
 

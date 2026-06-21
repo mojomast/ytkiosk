@@ -9,7 +9,6 @@ existing desktop shortcuts, tests, and direct invocations continue to work.
 from __future__ import annotations
 
 import sys
-from importlib import reload
 from pathlib import Path
 
 
@@ -19,8 +18,6 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from ytkiosk import legacy as _legacy  # noqa: E402
-
-_legacy = reload(_legacy)
 
 
 for _name in dir(_legacy):

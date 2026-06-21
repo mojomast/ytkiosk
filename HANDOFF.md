@@ -5,14 +5,14 @@ Hospital-grade kiosk YouTube player for Linux Mint. Designed for elderly patient
 
 ## Current State — FULLY WORKING
 - Fullscreen kiosk mode (no decorations, blocks Escape/Alt+F4)
-- mpv **embedded inside** tkinter window (no separate popup)
+- mpv **embedded inside** tkinter window on X11/XWayland; native Wayland uses standalone fullscreen fallback
 - Click a keyword → searches YouTube → fetches **30 videos** → filters long (≥5 min) → picks **20 random long ones** → auto-plays in shuffled order
 - On-screen controls: pause/next/prev/volume/stop/return-to-keywords
 - **Persistent keywords** saved to `~/.config/yt-player/keywords.json`
 - Help dialog for caregivers (French)
 - Exit with confirmation dialog
 - Captive portal detection & auto-accept on public WiFi
-- **34 app tests + 6 integration tests pass**
+- App and integration smoke tests cover command construction, display fallback, and Tk UI wiring
 
 ## Tech Stack
 
@@ -23,23 +23,23 @@ Hospital-grade kiosk YouTube player for Linux Mint. Designed for elderly patient
 | tkinter | 8.6 | apt (python3-tk) | — |
 | mpv | 0.37+ | apt or configured path | auto-detected with fallback `/usr/bin/mpv` |
 | yt-dlp | 2026.06.09+ | Python package for new installs; GitHub binary for legacy direct script use | package dependency / fallback `/usr/local/bin/yt-dlp` |
-| deno | 2.3.0+ | GitHub install script or future bundled sidecar | `YTKIOSK_DENO`, package sidecar, PATH, or `/usr/local/bin/deno` |
+| JS runtime | Optional; Deno 2.3.0+ preferred | Deno, Node 22+, QuickJS, or future bundled sidecar | `YTKIOSK_DENO`, package sidecar, PATH, or runtime-specific PATH lookup |
 
-### Critical: yt-dlp must be the latest GitHub release
-The apt version (`/usr/bin/yt-dlp`) is too old — YouTube's JS changes can break its `n`-signature extraction, causing HTTP 403 on all URLs. Remove the apt package and use the standalone binary from GitHub at `/usr/local/bin/yt-dlp`:
+### Critical: yt-dlp must be current
+The apt version (`/usr/bin/yt-dlp`) is often too old — YouTube's JS changes can break its `n`-signature extraction, causing HTTP 403 on all URLs. New installs use the PyPI package dependency (`yt-dlp[default]`) inside the YTKiosk venv. If running `simple-video-player.py` directly without installing the package, put a current `yt-dlp` on PATH:
 ```bash
 sudo apt remove -y yt-dlp || true
 sudo wget -q https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -O /usr/local/bin/yt-dlp && sudo chmod +x /usr/local/bin/yt-dlp
 /usr/local/bin/yt-dlp --version
 ```
 
-### Deno is required by yt-dlp for JS-based signature extraction
+### JavaScript runtime support is optional but recommended
+yt-dlp can use Deno, Node, QuickJS, or Bun for JavaScript extraction. YTKiosk prefers Deno when present, then Node, then QuickJS, and passes the resolved runtime explicitly to both playlist search and mpv's yt-dlp hook. Missing runtime is a doctor warning, not an install failure.
+
 ```bash
 curl -fsSL https://deno.land/install.sh | sh
-sudo install -m 755 "$HOME/.deno/bin/deno" /usr/local/bin/deno
-/usr/local/bin/deno --version
+~/.deno/bin/deno --version
 ```
-Install Deno into `/usr/local/bin` so subprocesses launched by the app and yt-dlp can find it reliably.
 
 ## Packaging Direction
 
@@ -59,8 +59,8 @@ ytkiosk-cli doctor
 
 Bundling policy:
 
-- Bundle/manage Python dependencies, including `yt-dlp`.
-- Bundle Deno as a Linux sidecar in future release artifacts when needed.
+- Bundle/manage Python dependencies, including `yt-dlp[default]`.
+- Bundle a JavaScript runtime sidecar in future release artifacts only when needed and license/checksum records are complete.
 - Do **not** bundle `mpv`; install it via the distro package manager.
 - Treat `xset`, `xdg-open`, and `pactl` as optional system helpers.
 
@@ -94,6 +94,7 @@ User clicks keyword (e.g. "Voitures classiques")
   ├─► Show loading overlay in main window
   │
   ├─► yt-dlp ytsearch30:{kw} --flat-playlist
+  │       --js-runtimes <runtime:path> when Deno/Node/QuickJS is detected
   │       --ignore-errors
   │       --match-filters "duration > 300 & !is_live"
   │       --print "%(id)s\t%(duration)s"
@@ -104,18 +105,21 @@ User clicks keyword (e.g. "Voitures classiques")
   │
   ├─► Switch to video mode:
   │     Hide keyword_frame → show video_frame
-  │     root.update_idletasks() → video_frame.winfo_id() → X11 window ID
+  │     X11/XWayland: root.update_idletasks() → video_frame.winfo_id() → X11 window ID
+  │     Native Wayland: keep app controls and use standalone fullscreen mpv
   │
-  ├─► Launch embedded mpv with --wid={X11_ID}
+  ├─► Launch mpv
   │     mpv --osd-level=0
-  │         --wid={X11_ID}
+  │         --wid={X11_ID} on embedded X11/XWayland
   │         --no-config
   │         --input-ipc-server=$RUNTIME_DIR/mpv-socket
   │         --keep-open=no
-  │         --gpu-context=x11egl
+  │         --gpu-context=x11egl on embedded X11/XWayland
+  │         --fs --ontop --no-border on standalone fallback
   │         --ao=<detected backend> --profile=fast
-  │         --x11-bypass-compositor=yes
+  │         --x11-bypass-compositor=yes on embedded X11/XWayland
   │         --ytdl-format="bv[height<=720]+ba/b[height<=720]"
+  │         --script-opts=ytdl_hook-ytdl_path=<YTKiosk venv yt-dlp>
   │         [20 shuffled YouTube URLs...]
   │
   └─► Controls enabled (IPC socket)
@@ -129,14 +133,14 @@ User clicks keyword (e.g. "Voitures classiques")
 - Results sorted by duration descending, top **20** selected, then **randomly shuffled**
 - First video is random from among the longest candidates; the rest auto-queue in random order
 
-### New: Embedded mpv (tkinter + X11)
+### New: Embedded mpv (tkinter + X11/XWayland)
 ```
 Main Window (fullscreen)
   ├── Top Bar: [Aide]  [QUITTER]
   ├── Main Area (fill both)
   │     ├── [Keyword View]  ← visible when choosing
   │     ├── [Loading Label] ← visible during search
-  │     └── [Video Frame]   ← mpv embedded via --wid=winfo_id()
+  │     └── [Video Frame]   ← mpv embedded via --wid=winfo_id() on X11/XWayland
   └── Control Bar: ⏮ ▶ ⏭ Volume Arrêter Mots-clés
 ```
 
@@ -199,17 +203,17 @@ Same logic as before: probe multiple endpoints, detect redirect, auto-accept or 
 
 ### Bug 2: "Window appears but black, no video" (INHERITED — still resolved)
 **Root cause:** Old yt-dlp (apt 2024.04.09) can't extract YouTube's `n` signature → 403 Forbidden.
-**Fix:** Use GitHub release + pass YouTube URLs instead of direct media URLs.
+**Fix:** Use package-managed `yt-dlp[default]` for installs, avoid stale distro yt-dlp, and pass YouTube URLs instead of direct media URLs.
 
 ### Bug 3: "Keyword reset on restart" (FIXED — added persistence)
 Keywords now saved to `~/.config/yt-player/keywords.json`.
 
 ### Bug 4: "mpv pops up as separate window" (FIXED — embedded with `--wid`)
-mpv now renders inside the tkinter window via X11 embedding.
+mpv now renders inside the tkinter window via X11/XWayland embedding. Native Wayland sessions use standalone fullscreen fallback instead of attempting unsupported native embedding.
 
 ## Known Issues / Gotchas
 
-1. **X11-oriented embedding** — mpv uses Tk's X11 window ID via `--wid`; Wayland or unusual GPU drivers may need mpv flag changes.
+1. **X11-oriented embedding** — mpv uses Tk's X11 window ID via `--wid`; native Wayland embedding is unsupported and falls back to standalone fullscreen mpv.
 2. **Captive portal auto-accept is best-effort** — works for simple "click agree" portals, not complex login portals.
 3. **Daemon worker threads** — stale playback startup callbacks are session-guarded, but workers are still daemon threads during app shutdown.
 4. **Duration filter may be too aggressive** — `MIN_DURATION=300` (5 min) might filter out good content for some keywords. Adjust config if needed.

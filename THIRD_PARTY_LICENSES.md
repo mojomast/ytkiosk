@@ -7,8 +7,9 @@ for every redistributed component.
 
 | Component | License | Bundling Plan | Notes |
 |---|---|---|---|
-| `yt-dlp` | Unlicense | Python package dependency | Use the PyPI package, not the distro package. |
-| Deno | MIT | Optional Linux sidecar in release bundles | Include Deno's license and upstream third-party notices when bundled. |
+| `yt-dlp` | Unlicense | Python package dependency | Use the PyPI package with default extras, not the distro package. |
+| `yt-dlp-ejs` and extractor helper packages | Varies by package | Python package dependency via `yt-dlp[default]` | Preserve package metadata/licenses in release artifacts. |
+| Deno / Node / QuickJS | Varies by runtime | Optional Linux sidecar in release bundles | Include runtime license and upstream third-party notices when bundled. |
 | Python dependencies | Varies | Installed by Python packaging tools | Preserve notices in release artifacts. |
 
 ## External System Dependencies
@@ -21,6 +22,6 @@ for every redistributed component.
 
 ## Release Rule
 
-Do not publish a binary release that contains Deno or any other third-party
-binary until its license text, upstream version, download URL, and checksum are
-recorded in the release notes or generated SBOM.
+Do not publish a binary release that contains Deno, Node, QuickJS, or any other
+third-party binary until its license text, upstream version, download URL, and
+checksum are recorded in the release notes or generated SBOM.

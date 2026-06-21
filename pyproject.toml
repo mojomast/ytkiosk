@@ -34,7 +34,7 @@ classifiers = [
   "Topic :: Multimedia :: Video",
 ]
 dependencies = [
-  "yt-dlp >= 2026.6.9",
+  "yt-dlp[default] >= 2026.6.9",
 ]
 
 [project.urls]
