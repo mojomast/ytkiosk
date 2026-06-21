@@ -65,22 +65,27 @@ User clicks keyword
 - **OS:** Linux (tested on Linux Mint 22.3 XFCE, X11)
 - **RAM:** 2–4 GB minimum
 - **Python:** 3.12+ with tkinter (`python3-tk`)
-- **mpv:** 0.37+
-- **yt-dlp:** Latest GitHub release (see below — the apt version is too old)
+- **mpv:** 0.37+ from apt is fine
+- **yt-dlp:** Latest GitHub release at `/usr/local/bin/yt-dlp` (do not use apt)
+- **Deno:** Required by current yt-dlp for YouTube JS signature extraction
 
 ### Install yt-dlp (Critical)
 
-The apt version of yt-dlp is outdated and will fail with HTTP 403 errors. Always use the latest GitHub release:
+The apt version of yt-dlp is outdated and can fail with HTTP 403 errors. Always remove the apt package and use the latest GitHub release:
 
 ```bash
+sudo apt remove -y yt-dlp || true
 sudo wget -q https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
   -O /usr/local/bin/yt-dlp && sudo chmod +x /usr/local/bin/yt-dlp
+/usr/local/bin/yt-dlp --version
 ```
 
 ### Install Deno (required by yt-dlp for JS signature extraction)
 
 ```bash
 curl -fsSL https://deno.land/install.sh | sh
+sudo install -m 755 "$HOME/.deno/bin/deno" /usr/local/bin/deno
+/usr/local/bin/deno --version
 ```
 
 ---
@@ -91,12 +96,14 @@ curl -fsSL https://deno.land/install.sh | sh
 # System dependencies
 sudo apt install python3 python3-tk mpv
 
-# Latest yt-dlp
+# Latest yt-dlp, not the apt package
+sudo apt remove -y yt-dlp || true
 sudo wget -q https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
   -O /usr/local/bin/yt-dlp && sudo chmod +x /usr/local/bin/yt-dlp
 
-# Deno
+# Deno, available to subprocesses launched by the app
 curl -fsSL https://deno.land/install.sh | sh
+sudo install -m 755 "$HOME/.deno/bin/deno" /usr/local/bin/deno
 
 # Clone and run
 git clone https://github.com/mojomast/ytkiosk.git

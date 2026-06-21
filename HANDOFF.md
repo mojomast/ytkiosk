@@ -21,21 +21,25 @@ Hospital-grade kiosk YouTube player for Linux Mint. Designed for elderly patient
 | OS | Linux Mint 22.3 (Zena), XFCE, X11 | — | — |
 | Python | 3.12.3 | apt (python3) | `/usr/bin/python3` |
 | tkinter | 8.6 | apt (python3-tk) | — |
-| mpv | 0.37.0 | apt | `/usr/bin/mpv` |
+| mpv | 0.37+ | apt | `/usr/bin/mpv` |
 | yt-dlp | 2026.06.09 | **GitHub release** (NOT apt) | `/usr/local/bin/yt-dlp` |
-| deno | latest | GitHub install script | `~/.deno/bin/deno` |
+| deno | latest | GitHub install script | `/usr/local/bin/deno` |
 
 ### Critical: yt-dlp must be the latest GitHub release
-The apt version (`/usr/bin/yt-dlp`) is too old — YouTube's JS changes break its `n`-signature extraction, causing HTTP 403 on all URLs. Always use the standalone binary from GitHub at `/usr/local/bin/yt-dlp`. Update with:
+The apt version (`/usr/bin/yt-dlp`) is too old — YouTube's JS changes can break its `n`-signature extraction, causing HTTP 403 on all URLs. Remove the apt package and use the standalone binary from GitHub at `/usr/local/bin/yt-dlp`:
 ```bash
+sudo apt remove -y yt-dlp || true
 sudo wget -q https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -O /usr/local/bin/yt-dlp && sudo chmod +x /usr/local/bin/yt-dlp
+/usr/local/bin/yt-dlp --version
 ```
 
 ### Deno is required by yt-dlp for JS-based signature extraction
 ```bash
 curl -fsSL https://deno.land/install.sh | sh
+sudo install -m 755 "$HOME/.deno/bin/deno" /usr/local/bin/deno
+/usr/local/bin/deno --version
 ```
-The `PATH` in the app's subprocess env includes `~/.deno/bin` via `$HOME/.deno/bin/deno`.
+Install Deno into `/usr/local/bin` so subprocesses launched by the app and yt-dlp can find it reliably.
 
 ## Files (all in `/home/baloney/yt/`)
 
