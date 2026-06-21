@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tkinter as tk
 import importlib.util
 
-APP_PATH = "/home/baloney/yt/simple-video-player.py"
+APP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "simple-video-player.py")
 
 spec = importlib.util.spec_from_file_location("svp", APP_PATH)
 mod = importlib.util.module_from_spec(spec)

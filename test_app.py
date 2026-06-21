@@ -67,8 +67,8 @@ def test_mpv_command_format():
         "mpv", "--osd-level=0",
         "--wid=<id>",
         "--no-config",
-        "--input-ipc-server=/tmp/mpv-socket",
-        "--keep-open=always",
+        "--input-ipc-server=<runtime>/mpv-socket",
+        "--keep-open=no",
         "--vo=gpu",
         "--hwdec=auto",
         "--gpu-context=x11egl",
@@ -79,8 +79,8 @@ def test_mpv_command_format():
     ] + urls
     required = [
         "--osd-level=0", "--no-config",
-        "--input-ipc-server=/tmp/mpv-socket",
-        "--keep-open=always",
+        "--input-ipc-server=<runtime>/mpv-socket",
+        "--keep-open=no",
         "--vo=gpu", "--hwdec=auto",
         "--gpu-context=x11egl", "--ao=pulse",
         "--profile=fast",
@@ -175,8 +175,9 @@ def test_i18n_selection():
 
 def test_mpv_remote_socket_path():
     mod = _import_module()
-    test("mpv socket is /tmp/mpv-socket",
-         mod.MPV_SOCKET == "/tmp/mpv-socket", f"got {mod.MPV_SOCKET}")
+    test("mpv socket is in private runtime dir",
+         mod.MPV_SOCKET.endswith("mpv-socket") and mod.RUNTIME_DIR in mod.MPV_SOCKET,
+         f"got {mod.MPV_SOCKET}")
 
 
 def test_mpv_remote_playlist_methods():
@@ -306,11 +307,11 @@ def test_load_state_missing_defaults():
 
 def test_kiosk_constants():
     mod = _import_module()
-    test("LOG_FILE is /tmp/yt-player.log",
-         mod.LOG_FILE == "/tmp/yt-player.log",
+    test("LOG_FILE is in private runtime dir",
+         mod.LOG_FILE.endswith("yt-player.log") and mod.RUNTIME_DIR in mod.LOG_FILE,
          f"got {mod.LOG_FILE}")
-    test("YTDLP binary at /usr/local/bin/yt-dlp",
-         mod.YTDLP == "/usr/local/bin/yt-dlp",
+    test("YTDLP binary configured",
+         bool(mod.YTDLP),
          f"got {mod.YTDLP}")
 
 

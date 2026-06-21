@@ -12,10 +12,24 @@ import socket
 import urllib.request
 import urllib.error
 import html.parser
-from urllib.parse import urljoin, urlparse
+import tempfile
+import shutil
+from urllib.parse import urljoin, urlparse, urlencode
 import random
 
 CONFIG_DIR = os.path.expanduser("~/.config/yt-player")
+RUNTIME_DIR = os.path.join(
+    os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir(),
+    f"yt-player-{os.getuid()}"
+)
+
+
+def _ensure_runtime_dir():
+    os.makedirs(RUNTIME_DIR, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(RUNTIME_DIR, 0o700)
+    except OSError:
+        pass
 
 
 def _load_config():
@@ -34,13 +48,35 @@ def _load_config():
 _cfg = _load_config()
 KEYWORDS_FILE = os.path.join(CONFIG_DIR, "keywords.json")
 STATE_FILE = os.path.join(CONFIG_DIR, "state.json")
-LOG_FILE = "/tmp/yt-player.log"
-MPV_SOCKET = "/tmp/mpv-socket"
-MPV = "/usr/bin/mpv"
-YTDLP = "/usr/local/bin/yt-dlp"
-SEARCH_COUNT = _cfg.get("search_count", 30)
-PLAYLIST_SIZE = _cfg.get("playlist_size", 20)
-MIN_DURATION = _cfg.get("min_duration", 300)
+_ensure_runtime_dir()
+LOG_FILE = os.path.join(RUNTIME_DIR, "yt-player.log")
+MPV_SOCKET = os.path.join(RUNTIME_DIR, "mpv-socket")
+MPV_LOG_FILE = os.path.join(RUNTIME_DIR, "mpv-embed.log")
+
+
+def _cfg_path(name, fallback_name, default):
+    value = _cfg.get(name)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return shutil.which(fallback_name) or default
+
+
+MPV = _cfg_path("mpv_path", "mpv", "/usr/bin/mpv")
+YTDLP = _cfg_path("ytdlp_path", "yt-dlp", "/usr/local/bin/yt-dlp")
+
+
+def _cfg_int(name, default, minimum):
+    try:
+        value = int(_cfg.get(name, default))
+        return value if value >= minimum else default
+    except (TypeError, ValueError):
+        return default
+
+
+SEARCH_COUNT = _cfg_int("search_count", 30, 1)
+PLAYLIST_SIZE = _cfg_int("playlist_size", 20, 1)
+MIN_DURATION = _cfg_int("min_duration", 300, 0)
+_log_lock = threading.Lock()
 
 
 def _detect_audio_backend():
@@ -58,8 +94,9 @@ def _detect_audio_backend():
 
 
 def log(msg):
-    with open(LOG_FILE, "a") as f:
-        f.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
+    with _log_lock:
+        with open(LOG_FILE, "a") as f:
+            f.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
 
 
 log("=== App started ===")
@@ -192,7 +229,7 @@ STRINGS_EN = {
     "playlist_ended": "Playlist ended",
 }
 
-_locale = locale.getdefaultlocale()
+_locale = locale.getlocale()
 _default_lang = _locale[0] if isinstance(_locale, tuple) else _locale
 _lang = os.environ.get("YTKIOSK_LANG", _default_lang or "en")
 FR = STRINGS_FR if _lang.startswith("fr") else STRINGS_EN
@@ -214,24 +251,25 @@ class MpvRemote:
             args = []
         msg = json.dumps({"command": [command] + args}) + "\n"
         try:
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            sock.settimeout(2.0)
-            sock.connect(self.socket_path)
-            sock.sendall(msg.encode())
-            data = b""
-            while True:
-                chunk = sock.recv(4096)
-                if not chunk:
-                    break
-                data += chunk
-                if b"\n" in data:
-                    break
-            sock.close()
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.settimeout(2.0)
+                sock.connect(self.socket_path)
+                sock.sendall(msg.encode())
+                data = b""
+                while True:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        break
+                    data += chunk
+                    if b"\n" in data:
+                        break
             resp = json.loads(data.decode())
+            if not isinstance(resp, dict):
+                return None
             if resp.get("error") != "success":
                 return None
             return resp.get("data")
-        except (socket.error, ConnectionRefusedError, FileNotFoundError):
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError, TimeoutError):
             return None
 
     def toggle_pause(self):
@@ -289,23 +327,26 @@ def detect_captive_portal():
         req = urllib.request.Request(url, method="GET")
         req.add_header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64)")
         try:
-            resp = urllib.request.urlopen(req, timeout=5)
-            actual_status = resp.status
-            if actual_status != expected_status:
-                portal_url = resp.url if resp.url != url else None
-                return True, portal_url, url
-            if expected_text:
-                body = resp.read(300).decode("utf-8", errors="replace")
-                if expected_text not in body:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                actual_status = resp.status
+                if actual_status != expected_status:
                     portal_url = resp.url if resp.url != url else None
                     return True, portal_url, url
+                if expected_text:
+                    body = resp.read(300).decode("utf-8", errors="replace")
+                    if expected_text not in body:
+                        portal_url = resp.url if resp.url != url else None
+                        return True, portal_url, url
         except urllib.error.HTTPError as e:
-            if e.code in (301, 302, 303, 307, 308):
-                portal_url = e.headers.get("Location")
-                if portal_url:
-                    abs_url = urljoin(url, portal_url)
-                    return True, abs_url, url
-            return False, None, url
+            try:
+                if e.code in (301, 302, 303, 307, 308):
+                    portal_url = e.headers.get("Location")
+                    if portal_url:
+                        abs_url = urljoin(url, portal_url)
+                        return True, abs_url, url
+                return False, None, url
+            finally:
+                e.close()
         except (urllib.error.URLError, OSError, ValueError):
             return False, None, url
     return False, None, None
@@ -325,31 +366,32 @@ class PortalFormParser(html.parser.HTMLParser):
             self._in_form = True
             self.form_action = d.get("action")
         if self._in_form and tag == "input":
-            self._current = {
+            field = {
                 "name": d.get("name", ""),
                 "value": d.get("value", ""),
                 "type": d.get("type", ""),
             }
+            if field.get("name"):
+                self.fields.append(field)
         if self._in_form and tag == "button" and d.get("type") == "submit":
-            self._current = {
+            field = {
                 "name": d.get("name", ""),
                 "value": d.get("value", "submit"),
                 "type": "submit",
             }
+            if field.get("name"):
+                self.fields.append(field)
 
     def handle_endtag(self, tag):
         if tag == "form":
             self._in_form = False
-        if self._in_form and tag == "input" and self._current.get("name"):
-            self.fields.append(self._current)
-            self._current = {}
 
 
 def try_auto_accept(portal_url, base_url=None):
     try:
         req = urllib.request.Request(portal_url, headers={"User-Agent": "Mozilla/5.0"})
-        resp = urllib.request.urlopen(req, timeout=10)
-        html_content = resp.read().decode("utf-8", errors="replace")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            html_content = resp.read().decode("utf-8", errors="replace")
     except Exception:
         return False
 
@@ -379,12 +421,13 @@ def try_auto_accept(portal_url, base_url=None):
     if not data:
         return False
 
-    encoded = urllib.parse.urlencode(data).encode()
+    encoded = urlencode(data).encode()
     try:
         req2 = urllib.request.Request(
             post_url, data=encoded, headers={"User-Agent": "Mozilla/5.0"}
         )
-        urllib.request.urlopen(req2, timeout=10)
+        with urllib.request.urlopen(req2, timeout=10):
+            pass
         return True
     except Exception:
         return False
@@ -429,10 +472,20 @@ def handle_captive_portal(root, on_done):
 
         def _open_browser(url):
             status_var.set("Ouverture du navigateur...")
-            if url:
-                subprocess.Popen(["xdg-open", url])
-            else:
-                subprocess.Popen(["xdg-open", PROBE_URLS[0]])
+            open_url = url or PROBE_URLS[0]
+            if urlparse(open_url).scheme not in ("http", "https"):
+                _done(False)
+                return
+            try:
+                subprocess.Popen(
+                    ["xdg-open", open_url],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except OSError as e:
+                log(f"Failed to open portal browser: {e}")
+                _done(False)
+                return
             _poll()
 
         def _poll():
@@ -482,6 +535,7 @@ class SimpleVideoPlayer:
         self._loading = False
         self._playlist_ending = False
         self._volume_save_after_id = None
+        self._session_id = 0
 
         self._setup_kiosk()
         self._build_ui()
@@ -496,10 +550,11 @@ class SimpleVideoPlayer:
         self.root.protocol("WM_DELETE_WINDOW", self._confirm_exit)
 
         try:
-            subprocess.Popen(
+            subprocess.run(
                 ["xset", "s", "off", "-dpms"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                timeout=3,
             )
         except Exception:
             pass
@@ -756,13 +811,17 @@ class SimpleVideoPlayer:
             return
         if self._playing:
             self._stop_playback()
+        self._session_id += 1
+        session_id = self._session_id
         self.current_keyword = keyword
         self._playlist_ending = False
         self._loading = True
         self._show_loading(FR["fetching"].format(keyword))
-        threading.Thread(target=self._play_keyword, args=(keyword,), daemon=True).start()
+        threading.Thread(
+            target=self._play_keyword, args=(keyword, session_id), daemon=True
+        ).start()
 
-    def _play_keyword(self, keyword):
+    def _play_keyword(self, keyword, session_id):
         try:
             log(FR["starting"].format(keyword))
 
@@ -781,26 +840,25 @@ class SimpleVideoPlayer:
                 )
                 wait.wait(timeout=120)
                 if not result[0]:
-                    self._on_error(FR["portal_fail"])
+                    self._schedule_error(FR["portal_fail"], session_id)
                     return
-
-            subprocess.run(["pkill", "mpv"], capture_output=True, timeout=5)
-            log(FR["killed"])
+            if not self._is_active_session(session_id):
+                return
 
             urls = self._fetch_playlist(keyword)
 
             if not urls:
-                self._on_error(FR["no_videos"].format(keyword))
+                self._schedule_error(FR["no_videos"].format(keyword), session_id)
                 return
 
             log(FR["launching"].format(len(urls)))
-            self.root.after(0, lambda: self._start_mpv(urls))
+            self.root.after(0, lambda: self._start_mpv(urls, session_id))
 
         except Exception as e:
             log(f"EXCEPTION: {e}")
             import traceback
             log(traceback.format_exc())
-            self._on_error(str(e))
+            self._schedule_error(str(e), session_id)
 
     def _fetch_playlist(self, keyword):
         log(FR["fetching"].format(keyword))
@@ -856,14 +914,15 @@ class SimpleVideoPlayer:
         log(f"Playlist: {[v for v, _ in selected]}")
         return urls
 
-    def _start_mpv(self, urls):
+    def _start_mpv(self, urls, session_id):
+        if not self._is_active_session(session_id):
+            return
         self._show_video_view()
         fw, fh = self._ensure_video_frame_sized()
         wid = self.video_frame.winfo_id()
         log(f"Video frame X11 ID: {wid} size={fw}x{fh}")
 
         env = os.environ.copy()
-        env["DISPLAY"] = os.environ.get("DISPLAY", ":0")
         env["PATH"] = f"/usr/local/bin:{env.get('PATH', '/usr/bin')}"
 
         cmd = [
@@ -871,7 +930,7 @@ class SimpleVideoPlayer:
             f"--wid={wid}",
             "--no-config",
             f"--input-ipc-server={MPV_SOCKET}",
-            "--keep-open=always",
+            "--keep-open=no",
             # Fallback for Wayland/no-GPU edge cases: replace with "--vo=x11".
             "--vo=gpu",
             "--hwdec=auto",
@@ -887,32 +946,47 @@ class SimpleVideoPlayer:
         except OSError:
             pass
 
-        mpv_log = open("/tmp/mpv-embed.log", "w")
-        self.mpv_proc = subprocess.Popen(
-            cmd, stdout=subprocess.DEVNULL, stderr=mpv_log, env=env,
-        )
-        log(f"mpv pid={self.mpv_proc.pid}")
+        try:
+            with open(MPV_LOG_FILE, "w") as mpv_log:
+                proc = subprocess.Popen(
+                    cmd, stdout=subprocess.DEVNULL, stderr=mpv_log, env=env,
+                )
+        except Exception as e:
+            log(f"Failed to launch mpv: {e}")
+            self._on_error(str(e), session_id)
+            return
+        self.mpv_proc = proc
+        log(f"mpv pid={proc.pid}")
 
-        threading.Thread(target=self._wait_for_mpv, args=(urls,), daemon=True).start()
+        threading.Thread(
+            target=self._wait_for_mpv, args=(proc, session_id), daemon=True
+        ).start()
 
-    def _wait_for_mpv(self, urls):
+    def _wait_for_mpv(self, proc, session_id):
         deadline = time.monotonic() + 10.0
         while time.monotonic() < deadline:
-            if self.mpv_proc and self.mpv_proc.poll() is not None:
-                code = self.mpv_proc.returncode
+            if not self._is_active_session(session_id, proc):
+                return
+            if proc.poll() is not None:
+                code = proc.returncode
                 log(FR["mpv_dead"].format(code))
                 self.root.after(
-                    0, lambda code=code: self._on_error(FR["mpv_exited"].format(code))
+                    0,
+                    lambda code=code: self._on_error(
+                        FR["mpv_exited"].format(code), session_id
+                    ),
                 )
                 return
             if self.mpv.is_running():
-                self.root.after(0, self._on_mpv_ready)
+                self.root.after(0, lambda: self._on_mpv_ready(proc, session_id))
                 return
             time.sleep(0.2)
-        self.root.after(0, lambda: self._on_error("mpv did not respond within 10 seconds"))
+        self.root.after(
+            0, lambda: self._on_error("mpv did not respond within 10 seconds", session_id)
+        )
 
-    def _on_mpv_ready(self):
-        if not self.mpv_proc or self.mpv_proc.poll() is not None:
+    def _on_mpv_ready(self, proc, session_id):
+        if not self._is_active_session(session_id, proc) or proc.poll() is not None:
             return
         log(FR["mpv_ok"])
         self._playing = True
@@ -928,22 +1002,11 @@ class SimpleVideoPlayer:
             self._stop_playback()
 
     def _stop_playback(self):
+        self._session_id += 1
         self._playing = False
         self._loading = False
+        self._terminate_mpv()
 
-        if self.mpv_proc and self.mpv_proc.poll() is None:
-            self.mpv.stop()
-            self.mpv_proc.terminate()
-            try:
-                self.mpv_proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                self.mpv_proc.kill()
-            self.mpv_proc = None
-
-        try:
-            subprocess.run(["pkill", "mpv"], capture_output=True, timeout=3)
-        except Exception:
-            pass
         try:
             os.unlink(MPV_SOCKET)
         except OSError:
@@ -1023,14 +1086,12 @@ class SimpleVideoPlayer:
             self.root.destroy()
 
     def _cleanup(self):
-        if self.mpv_proc and self.mpv_proc.poll() is None:
-            self.mpv.stop()
-            self.mpv_proc.terminate()
-            try:
-                self.mpv_proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                self.mpv_proc.kill()
-        subprocess.run(["pkill", "mpv"], capture_output=True, timeout=3)
+        self._session_id += 1
+        self._terminate_mpv()
+        try:
+            os.unlink(MPV_SOCKET)
+        except OSError:
+            pass
 
     # ── Persistent keywords ─────────────────────────────────────
 
@@ -1039,16 +1100,20 @@ class SimpleVideoPlayer:
             os.makedirs(CONFIG_DIR, exist_ok=True)
             if os.path.exists(KEYWORDS_FILE):
                 with open(KEYWORDS_FILE) as f:
-                    return json.load(f)
+                    data = json.load(f)
+                if isinstance(data, list) and all(isinstance(k, str) for k in data):
+                    return [k.strip() for k in data if k.strip()]
         except Exception as e:
             log(f"Failed to load keywords: {e}")
         return list(INITIAL_KEYWORDS)
 
     def _save_keywords(self):
         try:
-            os.makedirs(CONFIG_DIR, exist_ok=True)
+            os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
+            os.chmod(CONFIG_DIR, 0o700)
             with open(KEYWORDS_FILE, "w") as f:
                 json.dump(self.keywords, f, indent=2)
+            os.chmod(KEYWORDS_FILE, 0o600)
             self._save_state()
             log("Keywords saved")
         except Exception as e:
@@ -1060,7 +1125,7 @@ class SimpleVideoPlayer:
             if os.path.exists(STATE_FILE):
                 with open(STATE_FILE) as f:
                     data = json.load(f)
-                if isinstance(data, dict):
+                if isinstance(data, dict) and isinstance(data.get("volume", 75), (int, float)):
                     return data
         except Exception as e:
             log(f"Failed to load state: {e}")
@@ -1069,9 +1134,11 @@ class SimpleVideoPlayer:
     def _save_state(self):
         self._volume_save_after_id = None
         try:
-            os.makedirs(CONFIG_DIR, exist_ok=True)
+            os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
+            os.chmod(CONFIG_DIR, 0o700)
             with open(STATE_FILE, "w") as f:
                 json.dump({"volume": self._volume}, f, indent=2)
+            os.chmod(STATE_FILE, 0o600)
             log("State saved")
         except Exception as e:
             log(f"Failed to save state: {e}")
@@ -1086,11 +1153,17 @@ class SimpleVideoPlayer:
         if self.mpv_proc and self.mpv_proc.poll() is not None:
             if self._playlist_ending and self.current_keyword:
                 log(FR["playlist_ended"])
+                self._session_id += 1
+                session_id = self._session_id
+                keyword = self.current_keyword
                 self._playlist_ending = False
                 self._playing = False
+                self._loading = True
+                self.mpv_proc = None
+                self._show_loading(FR["fetching"].format(keyword))
                 threading.Thread(
                     target=self._play_keyword,
-                    args=(self.current_keyword,),
+                    args=(keyword, session_id),
                     daemon=True,
                 ).start()
             else:
@@ -1136,13 +1209,42 @@ class SimpleVideoPlayer:
 
     # ── Helpers ─────────────────────────────────────────────────
 
-    def _on_error(self, msg):
+    def _is_active_session(self, session_id, proc=None):
+        if session_id != self._session_id:
+            return False
+        return proc is None or self.mpv_proc is proc
+
+    def _schedule_error(self, msg, session_id):
+        self.root.after(0, lambda: self._on_error(msg, session_id))
+
+    def _terminate_mpv(self):
+        proc = self.mpv_proc
+        self.mpv_proc = None
+        if not proc:
+            return
+        if proc.poll() is None:
+            self.mpv.stop()
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                try:
+                    proc.wait(timeout=3)
+                except Exception:
+                    pass
+
+    def _on_error(self, msg, session_id=None):
+        if session_id is not None and not self._is_active_session(session_id):
+            return
         self._loading = False
         self._playing = False
+        self._terminate_mpv()
+        self._set_controls_enabled(False)
+        self.play_btn.config(text=FR["control_play"])
+        self._paused = False
         self._show_keyword_view()
-        self.root.after(0, lambda: messagebox.showerror(
-            FR["error"], msg, parent=self.root
-        ))
+        messagebox.showerror(FR["error"], msg, parent=self.root)
 
 
 if __name__ == "__main__":
